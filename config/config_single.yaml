@@ -1,0 +1,21 @@
+env_name: Hopper-v4
+num_actors: 1
+replay_buffer_capacity: 200000
+batch_size: 256
+gamma: 0.99
+gae_lambda: 0.95
+lr: 0.0002
+clip_ratio: 0.15
+vf_coef: 0.5
+ent_coef: 0.005
+rollout_length: 2048
+actor_update_interval: 1
+learner_updates_per_iter: 10
+max_iters: 1000
+log_interval: 10
+metrics_path: output/metrics_single.csv
+hidden_sizes: [256, 256]
+seed: 42
+use_cuda: true
+use_mps: true
+ray_address:

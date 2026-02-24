@@ -1,0 +1,15 @@
+docs/
+__pycache__/
+output/
+*.pyc
+*.pyo
+*.pyd
+.DS_Store
+*.log
+.idea/
+.vscode/
+ray_results/
+*.pt
+*.pth
+*.ckpt
+*.onnx
