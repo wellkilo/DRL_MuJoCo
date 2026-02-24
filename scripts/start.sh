@@ -2,7 +2,8 @@
 
 set -e
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 cd "$REPO_ROOT"
 
 ENV_NAME="drl-arm"
@@ -40,6 +41,7 @@ echo "1) Run distributed training (8 actors)"
 echo "2) Run single-agent training (1 actor)"
 echo "3) Plot training curves"
 echo "4) Plot comparison curves"
+echo "5) Launch Web UI (browser-based visualization)"
 read -p "Enter choice [1]: " choice
 
 choice=${choice:-1}
@@ -66,6 +68,12 @@ case $choice in
         echo "Plotting comparison curves..."
         python "$REPO_ROOT/scripts/plot_comparison.py"
         echo "Curves saved to: output/comparison_curves.png"
+        ;;
+    5)
+        echo ""
+        echo "Launching Web UI..."
+        echo "Open your browser and go to: http://127.0.0.1:8000"
+        python "$REPO_ROOT/web/server.py"
         ;;
     *)
         echo "ERROR: Invalid choice."

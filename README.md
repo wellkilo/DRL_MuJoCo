@@ -9,6 +9,7 @@
 - Learner 进行策略更新
 - ParameterServer 分发最新参数
 - 支持 CUDA / MPS / CPU 自动选择
+- **Web UI 可视化界面**：实时监控训练过程，一键启动/停止，在线绘图
 
 ## 目录结构
 
@@ -23,6 +24,10 @@
   - plot_comparison.py：单机与分布式对比曲线绘制脚本
   - build.sh：环境与依赖安装脚本
   - start.sh：训练与绘图启动脚本
+- web/：Web UI 目录
+  - server.py：FastAPI 后端服务
+  - templates/：HTML 模板
+  - static/：静态资源
 
 ## 快速开始
 
@@ -48,32 +53,7 @@ bash scripts/start.sh
 2. 单机训练（1 个 Actor）
 3. 绘制训练曲线
 4. 绘制对比曲线
-
-## 手动使用
-
-### 安装依赖
-
-```bash
-python -m pip install -r requirements.txt
-```
-
-### 运行训练
-
-```bash
-python main.py
-```
-
-训练过程中会输出 `output/metrics.csv`，包含训练速度与回报等指标。
-
-### 绘制曲线
-
-```bash
-python scripts/plot_training.py
-```
-
-将生成图像文件到 `output/` 目录：
-
-- output/training_curves.png：训练速度、回报、损失、回放池大小曲线
+5. 启动 Web UI 可视化
 
 ## 配置说明
 
@@ -90,28 +70,21 @@ python scripts/plot_training.py
 
 ## 单机与分布式对比实验
 
-要对比单机训练和分布式训练的效果，可以按以下步骤操作：
+要对比单机训练和分布式训练的效果，可以通过 `bash scripts/start.sh` 依次选择：
+1. 运行单机训练
+2. 运行分布式训练
+3. 绘制对比曲线
 
-1. **运行单机训练**
-   ```bash
-   python main.py config/config_single.yaml
-   ```
+生成 `output/comparison_curves.png`，对比：
+- 训练速度（SPS）
+- 平均回报（收敛速度）
 
-2. **运行分布式训练**（默认 8 个 Actor）
-   ```bash
-   python main.py
-   ```
+## Web UI 可视化
 
-3. **绘制训练曲线**
-   ```bash
-   python scripts/plot_training.py
-   ```
+启动 Web UI 服务器（通过 `bash scripts/start.sh` 选择选项 5），然后在浏览器中打开：http://127.0.0.1:8000
 
-4. **绘制对比曲线**
-   ```bash
-   python scripts/plot_comparison.py
-   ```
-
-   生成 `output/comparison_curves.png`，对比：
-   - 训练速度（SPS）
-   - 平均回报（收敛速度）
+### Web UI 功能
+- **开始/停止训练**：一键控制训练进程
+- **实时监控**：通过 WebSocket 实时更新训练指标
+- **在线绘图**：实时显示训练速度、平均回报、损失、回放池大小曲线
+- **刷新数据**：手动刷新历史训练数据
