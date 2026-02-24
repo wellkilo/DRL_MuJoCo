@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>DRL MuJoCo Web UI</title>
+    <title>DRL MuJoCo 分布式训练</title>
     <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
     <style>
         * {
@@ -20,7 +20,7 @@
         }
 
         .container {
-            max-width: 1400px;
+            max-width: 1600px;
             margin: 0 auto;
             background: white;
             border-radius: 16px;
@@ -75,6 +75,16 @@
             box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
         }
 
+        .btn-success {
+            background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
+            color: white;
+        }
+
+        .btn-success:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(40, 167, 69, 0.4);
+        }
+
         .btn-danger {
             background: #dc3545;
             color: white;
@@ -107,11 +117,47 @@
             border-color: #28a745;
         }
 
+        .tabs {
+            display: flex;
+            background: #f8f9fa;
+            border-bottom: 1px solid #e9ecef;
+        }
+
+        .tab {
+            padding: 1rem 2rem;
+            cursor: pointer;
+            border: none;
+            background: none;
+            font-size: 1rem;
+            font-weight: 600;
+            color: #6c757d;
+            transition: all 0.3s ease;
+            border-bottom: 3px solid transparent;
+        }
+
+        .tab:hover {
+            color: #667eea;
+        }
+
+        .tab.active {
+            color: #667eea;
+            border-bottom-color: #667eea;
+            background: white;
+        }
+
+        .tab-content {
+            display: none;
+            padding: 2rem;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
         .charts-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(500px, 1fr));
             gap: 1.5rem;
-            padding: 2rem;
         }
 
         .chart-card {
@@ -142,36 +188,87 @@
         </div>
 
         <div class="controls">
-            <button class="btn btn-primary" id="startBtn" onclick="startTraining()">开始训练</button>
+            <button class="btn btn-success" id="startDistBtn" onclick="startDistributedTraining()">开始分布式训练</button>
+            <button class="btn btn-primary" id="startSingleBtn" onclick="startSingleTraining()">开始单机训练</button>
             <button class="btn btn-danger" id="stopBtn" onclick="stopTraining()" disabled>停止训练</button>
             <button class="btn btn-primary" onclick="refreshMetrics()">刷新数据</button>
         </div>
 
         <div class="status" id="status">状态: 等待开始</div>
 
-        <div class="charts-grid">
-            <div class="chart-card">
-                <h3>训练速度 (SPS)</h3>
-                <canvas id="spsChart"></canvas>
+        <div class="tabs">
+            <button class="tab active" onclick="switchTab('distributed')">分布式</button>
+            <button class="tab" onclick="switchTab('single')">单机</button>
+            <button class="tab" onclick="switchTab('comparison')">对比</button>
+        </div>
+
+        <div id="tab-distributed" class="tab-content active">
+            <div class="charts-grid">
+                <div class="chart-card">
+                    <h3>训练速度 (SPS)</h3>
+                    <canvas id="distSpsChart"></canvas>
+                </div>
+                <div class="chart-card">
+                    <h3>平均回报</h3>
+                    <canvas id="distReturnChart"></canvas>
+                </div>
+                <div class="chart-card">
+                    <h3>损失</h3>
+                    <canvas id="distLossChart"></canvas>
+                </div>
+                <div class="chart-card">
+                    <h3>回放池大小</h3>
+                    <canvas id="distBufferChart"></canvas>
+                </div>
             </div>
-            <div class="chart-card">
-                <h3>平均回报</h3>
-                <canvas id="returnChart"></canvas>
+        </div>
+
+        <div id="tab-single" class="tab-content">
+            <div class="charts-grid">
+                <div class="chart-card">
+                    <h3>训练速度 (SPS)</h3>
+                    <canvas id="singleSpsChart"></canvas>
+                </div>
+                <div class="chart-card">
+                    <h3>平均回报</h3>
+                    <canvas id="singleReturnChart"></canvas>
+                </div>
+                <div class="chart-card">
+                    <h3>损失</h3>
+                    <canvas id="singleLossChart"></canvas>
+                </div>
+                <div class="chart-card">
+                    <h3>回放池大小</h3>
+                    <canvas id="singleBufferChart"></canvas>
+                </div>
             </div>
-            <div class="chart-card">
-                <h3>损失</h3>
-                <canvas id="lossChart"></canvas>
-            </div>
-            <div class="chart-card">
-                <h3>回放池大小</h3>
-                <canvas id="bufferChart"></canvas>
+        </div>
+
+        <div id="tab-comparison" class="tab-content">
+            <div class="charts-grid">
+                <div class="chart-card">
+                    <h3>训练速度对比 (SPS)</h3>
+                    <canvas id="compSpsChart"></canvas>
+                </div>
+                <div class="chart-card">
+                    <h3>平均回报对比</h3>
+                    <canvas id="compReturnChart"></canvas>
+                </div>
+                <div class="chart-card">
+                    <h3>损失对比</h3>
+                    <canvas id="compLossChart"></canvas>
+                </div>
+                <div class="chart-card">
+                    <h3>回放池大小对比</h3>
+                    <canvas id="compBufferChart"></canvas>
+                </div>
             </div>
         </div>
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script>
-        let spsChart, returnChart, lossChart, bufferChart;
+        let charts = {};
         let ws = null;
         let isRunning = false;
 
@@ -181,60 +278,150 @@
                 maintainAspectRatio: false,
                 animation: { duration: 300 },
                 scales: {
-                    x: {
-                        title: { display: true, text: 'Step' },
-                    },
-                    y: {
-                        beginAtZero: false,
-                    },
+                    x: { title: { display: true, text: 'Step' } },
+                    y: { beginAtZero: false },
                 },
-                plugins: {
-                    legend: { display: false },
-                },
+                plugins: { legend: { display: true, position: 'top' } },
             };
 
-            spsChart = new Chart(document.getElementById('spsChart'), {
+            charts.distSps = new Chart(document.getElementById('distSpsChart'), {
                 type: 'line',
-                data: { labels: [], datasets: [{ label: 'SPS', data: [], borderColor: '#667eea', backgroundColor: 'rgba(102, 126, 234, 0.1)', fill: true, tension: 0.4 }] },
+                data: { labels: [], datasets: [{ label: 'Distributed SPS', data: [], borderColor: '#667eea', backgroundColor: 'rgba(102, 126, 234, 0.1)', fill: true, tension: 0.4 }] },
                 options: { ...commonOptions, scales: { ...commonOptions.scales, y: { ...commonOptions.scales.y, beginAtZero: true } } },
             });
 
-            returnChart = new Chart(document.getElementById('returnChart'), {
+            charts.distReturn = new Chart(document.getElementById('distReturnChart'), {
                 type: 'line',
-                data: { labels: [], datasets: [{ label: 'Avg Return', data: [], borderColor: '#f59e0b', backgroundColor: 'rgba(245, 158, 11, 0.1)', fill: true, tension: 0.4 }] },
+                data: { labels: [], datasets: [{ label: 'Distributed Return', data: [], borderColor: '#f59e0b', backgroundColor: 'rgba(245, 158, 11, 0.1)', fill: true, tension: 0.4 }] },
                 options: commonOptions,
             });
 
-            lossChart = new Chart(document.getElementById('lossChart'), {
+            charts.distLoss = new Chart(document.getElementById('distLossChart'), {
                 type: 'line',
-                data: { labels: [], datasets: [{ label: 'Loss', data: [], borderColor: '#dc3545', backgroundColor: 'rgba(220, 53, 69, 0.1)', fill: true, tension: 0.4 }] },
+                data: { labels: [], datasets: [{ label: 'Distributed Loss', data: [], borderColor: '#dc3545', backgroundColor: 'rgba(220, 53, 69, 0.1)', fill: true, tension: 0.4 }] },
                 options: commonOptions,
             });
 
-            bufferChart = new Chart(document.getElementById('bufferChart'), {
+            charts.distBuffer = new Chart(document.getElementById('distBufferChart'), {
                 type: 'line',
-                data: { labels: [], datasets: [{ label: 'Buffer Size', data: [], borderColor: '#28a745', backgroundColor: 'rgba(40, 167, 69, 0.1)', fill: true, tension: 0.4 }] },
+                data: { labels: [], datasets: [{ label: 'Distributed Buffer', data: [], borderColor: '#28a745', backgroundColor: 'rgba(40, 167, 69, 0.1)', fill: true, tension: 0.4 }] },
+                options: { ...commonOptions, scales: { ...commonOptions.scales, y: { ...commonOptions.scales.y, beginAtZero: true } } },
+            });
+
+            charts.singleSps = new Chart(document.getElementById('singleSpsChart'), {
+                type: 'line',
+                data: { labels: [], datasets: [{ label: 'Single SPS', data: [], borderColor: '#667eea', backgroundColor: 'rgba(102, 126, 234, 0.1)', fill: true, tension: 0.4 }] },
+                options: { ...commonOptions, scales: { ...commonOptions.scales, y: { ...commonOptions.scales.y, beginAtZero: true } } },
+            });
+
+            charts.singleReturn = new Chart(document.getElementById('singleReturnChart'), {
+                type: 'line',
+                data: { labels: [], datasets: [{ label: 'Single Return', data: [], borderColor: '#f59e0b', backgroundColor: 'rgba(245, 158, 11, 0.1)', fill: true, tension: 0.4 }] },
+                options: commonOptions,
+            });
+
+            charts.singleLoss = new Chart(document.getElementById('singleLossChart'), {
+                type: 'line',
+                data: { labels: [], datasets: [{ label: 'Single Loss', data: [], borderColor: '#dc3545', backgroundColor: 'rgba(220, 53, 69, 0.1)', fill: true, tension: 0.4 }] },
+                options: commonOptions,
+            });
+
+            charts.singleBuffer = new Chart(document.getElementById('singleBufferChart'), {
+                type: 'line',
+                data: { labels: [], datasets: [{ label: 'Single Buffer', data: [], borderColor: '#28a745', backgroundColor: 'rgba(40, 167, 69, 0.1)', fill: true, tension: 0.4 }] },
+                options: { ...commonOptions, scales: { ...commonOptions.scales, y: { ...commonOptions.scales.y, beginAtZero: true } } },
+            });
+
+            charts.compSps = new Chart(document.getElementById('compSpsChart'), {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [
+                        { label: 'Distributed', data: [], borderColor: '#667eea', backgroundColor: 'rgba(102, 126, 234, 0.1)', fill: true, tension: 0.4 },
+                        { label: 'Single', data: [], borderColor: '#20c997', backgroundColor: 'rgba(32, 201, 151, 0.1)', fill: true, tension: 0.4 }
+                    ]
+                },
+                options: { ...commonOptions, scales: { ...commonOptions.scales, y: { ...commonOptions.scales.y, beginAtZero: true } } },
+            });
+
+            charts.compReturn = new Chart(document.getElementById('compReturnChart'), {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [
+                        { label: 'Distributed', data: [], borderColor: '#667eea', backgroundColor: 'rgba(102, 126, 234, 0.1)', fill: true, tension: 0.4 },
+                        { label: 'Single', data: [], borderColor: '#20c997', backgroundColor: 'rgba(32, 201, 151, 0.1)', fill: true, tension: 0.4 }
+                    ]
+                },
+                options: commonOptions,
+            });
+
+            charts.compLoss = new Chart(document.getElementById('compLossChart'), {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [
+                        { label: 'Distributed', data: [], borderColor: '#667eea', backgroundColor: 'rgba(102, 126, 234, 0.1)', fill: true, tension: 0.4 },
+                        { label: 'Single', data: [], borderColor: '#20c997', backgroundColor: 'rgba(32, 201, 151, 0.1)', fill: true, tension: 0.4 }
+                    ]
+                },
+                options: commonOptions,
+            });
+
+            charts.compBuffer = new Chart(document.getElementById('compBufferChart'), {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [
+                        { label: 'Distributed', data: [], borderColor: '#667eea', backgroundColor: 'rgba(102, 126, 234, 0.1)', fill: true, tension: 0.4 },
+                        { label: 'Single', data: [], borderColor: '#20c997', backgroundColor: 'rgba(32, 201, 151, 0.1)', fill: true, tension: 0.4 }
+                    ]
+                },
                 options: { ...commonOptions, scales: { ...commonOptions.scales, y: { ...commonOptions.scales.y, beginAtZero: true } } },
             });
         }
 
-        function updateCharts(metrics) {
+        function updateSingleChart(chart, metrics, key, label) {
             const labels = metrics.map(m => m.step);
-            spsChart.data.labels = labels;
-            spsChart.data.datasets[0].data = metrics.map(m => m.sps);
-            spsChart.update('none');
+            chart.data.labels = labels;
+            chart.data.datasets[0].data = metrics.map(m => m[key]);
+            chart.data.datasets[0].label = label;
+            chart.update('none');
+        }
 
-            returnChart.data.labels = labels;
-            returnChart.data.datasets[0].data = metrics.map(m => m.avg_return);
-            returnChart.update('none');
+        function updateComparisonChart(chart, distMetrics, singleMetrics, key) {
+            const distLabels = distMetrics.map(m => m.step);
+            const singleLabels = singleMetrics.map(m => m.step);
+            const allLabels = Array.from(new Set([...distLabels, ...singleLabels])).sort((a, b) => a - b);
+            chart.data.labels = allLabels;
+            chart.data.datasets[0].data = allLabels.map(step => {
+                const m = distMetrics.find(x => x.step === step);
+                return m ? m[key] : null;
+            });
+            chart.data.datasets[1].data = allLabels.map(step => {
+                const m = singleMetrics.find(x => x.step === step);
+                return m ? m[key] : null;
+            });
+            chart.update('none');
+        }
 
-            lossChart.data.labels = labels;
-            lossChart.data.datasets[0].data = metrics.map(m => m.loss);
-            lossChart.update('none');
-
-            bufferChart.data.labels = labels;
-            bufferChart.data.datasets[0].data = metrics.map(m => m.buffer_size);
-            bufferChart.update('none');
+        function updateAllCharts(distMetrics, singleMetrics) {
+            if (distMetrics.length > 0) {
+                updateSingleChart(charts.distSps, distMetrics, 'sps', 'Distributed SPS');
+                updateSingleChart(charts.distReturn, distMetrics, 'avg_return', 'Distributed Return');
+                updateSingleChart(charts.distLoss, distMetrics, 'loss', 'Distributed Loss');
+                updateSingleChart(charts.distBuffer, distMetrics, 'buffer_size', 'Distributed Buffer');
+            }
+            if (singleMetrics.length > 0) {
+                updateSingleChart(charts.singleSps, singleMetrics, 'sps', 'Single SPS');
+                updateSingleChart(charts.singleReturn, singleMetrics, 'avg_return', 'Single Return');
+                updateSingleChart(charts.singleLoss, singleMetrics, 'loss', 'Single Loss');
+                updateSingleChart(charts.singleBuffer, singleMetrics, 'buffer_size', 'Single Buffer');
+            }
+            updateComparisonChart(charts.compSps, distMetrics, singleMetrics, 'sps');
+            updateComparisonChart(charts.compReturn, distMetrics, singleMetrics, 'avg_return');
+            updateComparisonChart(charts.compLoss, distMetrics, singleMetrics, 'loss');
+            updateComparisonChart(charts.compBuffer, distMetrics, singleMetrics, 'buffer_size');
         }
 
         function setStatus(text, running = false) {
@@ -243,15 +430,33 @@
             statusEl.className = 'status' + (running ? ' running' : '');
         }
 
-        async function startTraining() {
+        async function startDistributedTraining() {
             try {
-                const resp = await fetch('/api/training/start', { method: 'POST' });
+                const resp = await fetch('/api/training/distributed/start', { method: 'POST' });
                 const data = await resp.json();
                 if (data.status === 'started' || data.status === 'already running') {
                     isRunning = true;
-                    document.getElementById('startBtn').disabled = true;
+                    document.getElementById('startDistBtn').disabled = true;
+                    document.getElementById('startSingleBtn').disabled = true;
                     document.getElementById('stopBtn').disabled = false;
-                    setStatus('状态: 训练中...', true);
+                    setStatus('状态: 分布式训练中...', true);
+                    connectWebSocket();
+                }
+            } catch (e) {
+                console.error(e);
+            }
+        }
+
+        async function startSingleTraining() {
+            try {
+                const resp = await fetch('/api/training/single/start', { method: 'POST' });
+                const data = await resp.json();
+                if (data.status === 'started' || data.status === 'already running') {
+                    isRunning = true;
+                    document.getElementById('startDistBtn').disabled = true;
+                    document.getElementById('startSingleBtn').disabled = true;
+                    document.getElementById('stopBtn').disabled = false;
+                    setStatus('状态: 单机训练中...', true);
                     connectWebSocket();
                 }
             } catch (e) {
@@ -263,7 +468,8 @@
             try {
                 await fetch('/api/training/stop', { method: 'POST' });
                 isRunning = false;
-                document.getElementById('startBtn').disabled = false;
+                document.getElementById('startDistBtn').disabled = false;
+                document.getElementById('startSingleBtn').disabled = false;
                 document.getElementById('stopBtn').disabled = true;
                 setStatus('状态: 已停止');
                 if (ws) {
@@ -276,9 +482,13 @@
 
         async function refreshMetrics() {
             try {
-                const resp = await fetch('/api/metrics');
-                const metrics = await resp.json();
-                updateCharts(metrics);
+                const [distResp, singleResp] = await Promise.all([
+                    fetch('/api/metrics/distributed'),
+                    fetch('/api/metrics/single')
+                ]);
+                const distMetrics = await distResp.json();
+                const singleMetrics = await singleResp.json();
+                updateAllCharts(distMetrics, singleMetrics);
             } catch (e) {
                 console.error(e);
             }
@@ -290,7 +500,7 @@
             ws.onmessage = (event) => {
                 const msg = JSON.parse(event.data);
                 if (msg.type === 'metrics') {
-                    updateCharts(msg.data);
+                    updateAllCharts(msg.distributed || [], msg.single || []);
                 }
             };
             ws.onclose = () => {
@@ -298,6 +508,13 @@
                     setTimeout(connectWebSocket, 1000);
                 }
             };
+        }
+
+        function switchTab(tabName) {
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+            document.querySelector(`.tab[onclick="switchTab('${tabName}')"]`).classList.add('active');
+            document.getElementById(`tab-${tabName}`).classList.add('active');
         }
 
         initCharts();

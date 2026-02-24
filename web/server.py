@@ -30,9 +30,7 @@ async def get_index() -> FileResponse:
     return FileResponse(REPO_ROOT / "web/templates/index.html")
 
 
-@app.get("/api/metrics")
-async def get_metrics() -> list[dict[str, Any]]:
-    metrics_path = OUTPUT_DIR / "metrics.csv"
+def load_metrics_file(metrics_path: Path) -> list[dict[str, Any]]:
     if not metrics_path.exists():
         return []
     metrics: list[dict[str, Any]] = []
@@ -41,6 +39,16 @@ async def get_metrics() -> list[dict[str, Any]]:
         for row in reader:
             metrics.append({k: float(v) if k not in ("step", "episodes") else int(float(v)) for k, v in row.items()})
     return metrics
+
+
+@app.get("/api/metrics/distributed")
+async def get_metrics_distributed() -> list[dict[str, Any]]:
+    return load_metrics_file(OUTPUT_DIR / "metrics.csv")
+
+
+@app.get("/api/metrics/single")
+async def get_metrics_single() -> list[dict[str, Any]]:
+    return load_metrics_file(OUTPUT_DIR / "metrics_single.csv")
 
 
 @app.websocket("/ws/training")
@@ -56,13 +64,28 @@ async def websocket_training(websocket: WebSocket) -> None:
         clients.remove(websocket)
 
 
-@app.post("/api/training/start")
-async def start_training() -> dict[str, str]:
+@app.post("/api/training/distributed/start")
+async def start_training_distributed() -> dict[str, str]:
     global training_task
     if training_task and training_task.returncode is None:
         return {"status": "already running"}
     training_task = await asyncio.create_subprocess_exec(
         "python", str(REPO_ROOT / "main.py"),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+        cwd=str(REPO_ROOT),
+    )
+    asyncio.create_task(monitor_training())
+    return {"status": "started"}
+
+
+@app.post("/api/training/single/start")
+async def start_training_single() -> dict[str, str]:
+    global training_task
+    if training_task and training_task.returncode is None:
+        return {"status": "already running"}
+    training_task = await asyncio.create_subprocess_exec(
+        "python", str(REPO_ROOT / "main.py"), str(REPO_ROOT / "config" / "config_single.yaml"),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
         cwd=str(REPO_ROOT),
@@ -88,10 +111,11 @@ async def monitor_training() -> None:
     if not training_task:
         return
     while training_task.returncode is None:
-        metrics = await get_metrics()
+        dist_metrics = await get_metrics_distributed()
+        single_metrics = await get_metrics_single()
         for client in clients:
             try:
-                await client.send_text(json.dumps({"type": "metrics", "data": metrics}))
+                await client.send_text(json.dumps({"type": "metrics", "distributed": dist_metrics, "single": single_metrics}))
             except Exception:
                 pass
         await asyncio.sleep(1.0)

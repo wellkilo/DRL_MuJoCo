@@ -2,6 +2,17 @@
 
 本项目实现基于 Ray 的分布式 Actor-Learner 架构，面向 MuJoCo 环境进行并行采样与学习。
 
+## 系统界面展示
+
+### 分布式训练视图
+![分布式训练视图](assets/web_ui_distributed.png)
+
+### 单机训练视图
+![单机训练视图](assets/web_ui_single.png)
+
+### 对比视图
+![对比视图](assets/web_ui_comparison.png)
+
 ## 功能概览
 
 - Actor 采样器并行与环境交互
