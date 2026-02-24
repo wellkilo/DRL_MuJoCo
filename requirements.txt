@@ -6,3 +6,6 @@ mujoco==2.3.7
 imageio
 PyYAML
 matplotlib
+fastapi
+uvicorn
+websockets

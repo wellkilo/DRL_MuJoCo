@@ -2,7 +2,8 @@
 
 set -e
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 cd "$REPO_ROOT"
 
 ENV_NAME="drl-arm"
@@ -63,5 +64,5 @@ echo "To use this environment:"
 echo "  conda activate $ENV_NAME"
 echo ""
 echo "To run training:"
-echo "  bash start.sh"
+echo "  bash scripts/start.sh"
 echo ""
