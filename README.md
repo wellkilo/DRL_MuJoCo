@@ -92,7 +92,7 @@ bash scripts/start.sh
 
 ## Web UI 可视化
 
-启动 Web UI 服务器（通过 `bash scripts/start.sh` 选择选项 5），然后在浏览器中打开：http://127.0.0.1:8000
+启动 Web UI 服务器（通过 `bash scripts/start.sh` 选择选项 5），在浏览器中打开：http://127.0.0.1:8000
 
 ### Web UI 功能
 - **开始/停止训练**：一键控制训练进程
