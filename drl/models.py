@@ -86,7 +86,7 @@ class ActorCritic(torch.nn.Module):
             value: 状态价值 [batch_size]
         """
         mean = self.policy_head(self.policy_net(obs))
-        value = self.value_net(self.value_net(obs)).squeeze(-1)
+        value = self.value_head(self.value_net(obs)).squeeze(-1)
         return mean, value
 
     def get_dist_and_value(self, obs: torch.Tensor) -> tuple[torch.distributions.Normal, torch.Tensor]:
