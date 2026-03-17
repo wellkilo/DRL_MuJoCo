@@ -4,6 +4,8 @@ numpy<2
 gymnasium==1.1.1
 mujoco==2.3.7
 imageio
+imageio-ffmpeg
+moviepy
 PyYAML
 matplotlib
 fastapi

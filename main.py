@@ -5,16 +5,68 @@ from __future__ import annotations
 
 import csv
 import math
+import signal
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import ray
+import torch
 
 from drl.config_loader import load_config
 from drl.logging_utils import log_event
 from drl.ray_components import Learner, MuJoCoActor, ParameterServer, ReplayBuffer
+
+# 全局变量用于信号处理
+global_state: dict[str, Any] = {}
+
+
+def save_model_and_exit(signum: int, frame: Any) -> None:
+    """
+    信号处理函数：在收到终止信号时保存模型并退出
+    """
+    print("\n[Main] Received termination signal, saving model...", flush=True)
+    print(f"[Main] Global state keys: {list(global_state.keys())}", flush=True)
+    
+    try:
+        if "learner" in global_state and "config_path" in global_state and "OUTPUT_DIR" in global_state:
+            print(f"[Main] Getting model state from learner...", flush=True)
+            # 获取最终模型状态
+            final_state = ray.get(global_state["learner"].get_state.remote())
+            print(f"[Main] Got model state, saving...", flush=True)
+            
+            # 保存模型
+            config_name = Path(global_state["config_path"]).stem
+            model_path = global_state["OUTPUT_DIR"] / f"model_{config_name}.pt"
+            print(f"[Main] Saving to: {model_path}", flush=True)
+            torch.save(final_state, model_path)
+            print(f"[Main] Model saved to {model_path}", flush=True)
+        else:
+            print(f"[Main] Missing required keys in global state", flush=True)
+    except Exception as e:
+        print(f"[Main] Error saving model: {e}", flush=True)
+        import traceback
+        traceback.print_exc()
+    
+    # 关闭 metrics 文件
+    if "metrics_file" in global_state:
+        try:
+            global_state["metrics_file"].close()
+            print("[Main] Metrics file closed", flush=True)
+        except Exception:
+            pass
+    
+    # 清理 Ray
+    try:
+        ray.shutdown()
+        print("[Main] Ray shutdown", flush=True)
+    except Exception:
+        pass
+    
+    print("[Main] Exiting...", flush=True)
+    sys.exit(0)
 
 
 def main() -> None:
@@ -23,6 +75,18 @@ def main() -> None:
     if len(sys.argv) > 1:
         config_path = sys.argv[1]
     cfg = load_config(config_path)
+
+    # 定义输出目录
+    OUTPUT_DIR = Path("output")
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    
+    # 保存全局状态
+    global_state["config_path"] = config_path
+    global_state["OUTPUT_DIR"] = OUTPUT_DIR
+    
+    # 注册信号处理函数
+    signal.signal(signal.SIGINT, save_model_and_exit)   # Ctrl+C
+    signal.signal(signal.SIGTERM, save_model_and_exit)  # Terminate signal
 
     # 导入 Gymnasium 并初始化环境以获取观测和动作空间维度
     import gymnasium as gym
@@ -42,10 +106,20 @@ def main() -> None:
     param_server = ParameterServer.remote()
     # 3. 学习器 - 负责从 ReplayBuffer 采样并更新模型
     learner = Learner.remote(obs_dim, action_dim, replay_buffer, cfg.__dict__)
+    
+    # 保存 learner 到全局状态，以便信号处理时可以访问
+    global_state["learner"] = learner
 
     # 初始化：Learner 生成初始模型状态，同步到 ParameterServer
     init_state = ray.get(learner.get_state.remote())
     ray.get(param_server.set.remote(init_state))
+    
+    # 立即保存初始模型，确保即使训练很快停止也有模型文件
+    print(f"[Main] Saving initial model...", flush=True)
+    config_name = Path(config_path).stem
+    model_path = OUTPUT_DIR / f"model_{config_name}.pt"
+    torch.save(init_state, model_path)
+    print(f"[Main] Initial model saved to {model_path}", flush=True)
 
     # 创建多个 Actor 并行采集经验
     actors = [MuJoCoActor.remote(cfg.env_name, i, cfg.seed, cfg.hidden_sizes) for i in range(cfg.num_actors)]
@@ -63,6 +137,10 @@ def main() -> None:
     metrics_path = Path(cfg.metrics_path)
     metrics_path.parent.mkdir(parents=True, exist_ok=True)
     metrics_file = metrics_path.open("w", newline="")
+    
+    # 保存 metrics_file 到全局状态
+    global_state["metrics_file"] = metrics_file
+    
     metrics_writer = csv.DictWriter(
         metrics_file,
         fieldnames=[
@@ -161,7 +239,14 @@ def main() -> None:
         # 避免过度占用 CPU
         time.sleep(0.01)
 
-    # 训练结束，关闭文件
+    # 训练结束，保存模型
+    final_state = ray.get(learner.get_state.remote())
+    config_name = Path(config_path).stem
+    model_path = OUTPUT_DIR / f"model_{config_name}.pt"
+    torch.save(final_state, model_path)
+    print(f"Model saved to {model_path}")
+
+    # 关闭文件
     metrics_file.close()
 
 

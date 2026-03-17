@@ -19,6 +19,7 @@
             <button class="btn btn-primary" id="startSingleBtn" onclick="startSingleTraining()">开始单机训练</button>
             <button class="btn btn-danger" id="stopBtn" onclick="stopTraining()" disabled>停止训练</button>
             <button class="btn btn-primary" onclick="refreshMetrics()">刷新数据</button>
+            <button class="btn btn-success" id="genVideoBtn" onclick="generateVideos()">一键生成视频</button>
         </div>
 
         <div class="status" id="status">状态: 等待开始</div>
@@ -89,6 +90,32 @@
                     <h3>回放池大小对比</h3>
                     <canvas id="compBufferChart"></canvas>
                 </div>
+            </div>
+        </div>
+
+        <div class="video-section">
+            <h2>视频演示对比</h2>
+            <div class="video-status" id="videoStatus">视频状态: 等待生成</div>
+            <div class="video-container">
+                <div class="video-card">
+                    <h3>分布式训练</h3>
+                    <video id="videoDistributed" controls class="video-player">
+                        <source src="/api/videos/distributed" type="video/mp4">
+                        您的浏览器不支持视频播放
+                    </video>
+                </div>
+                <div class="video-card">
+                    <h3>单机训练</h3>
+                    <video id="videoSingle" controls class="video-player">
+                        <source src="/api/videos/single" type="video/mp4">
+                        您的浏览器不支持视频播放
+                    </video>
+                </div>
+            </div>
+            <div class="video-controls">
+                <button class="btn btn-primary" onclick="playAllVideos()">同步播放</button>
+                <button class="btn btn-primary" onclick="pauseAllVideos()">同步暂停</button>
+                <button class="btn btn-primary" onclick="resetAllVideos()">重置</button>
             </div>
         </div>
     </div>
