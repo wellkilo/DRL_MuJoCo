@@ -174,9 +174,11 @@ class MuJoCoActor:
         self.obs_dim = int(np.asarray(obs).shape[0])
         self.action_dim = int(np.asarray(self.env.action_space.shape[0]))
 
-        # 获取动作空间范围（用于裁剪）
+        # 获取动作空间范围（用于裁剪和分布变换）
         self.action_low = np.asarray(self.env.action_space.low, dtype=np.float32)
         self.action_high = np.asarray(self.env.action_space.high, dtype=np.float32)
+        self.action_low_t = torch.as_tensor(self.action_low, dtype=torch.float32)
+        self.action_high_t = torch.as_tensor(self.action_high, dtype=torch.float32)
 
         # 创建 Actor-Critic 模型（用于推理）
         self.model = ActorCritic(self.obs_dim, self.action_dim, hidden_sizes=hidden_sizes)
@@ -234,17 +236,17 @@ class MuJoCoActor:
 
             # 将动作转换为 numpy 并裁剪到合法范围
             action = action_t.squeeze(0).cpu().numpy()
-            clipped = np.clip(action, self.action_low, self.action_high)
+            action_clipped = np.clip(action, self.action_low, self.action_high)
 
             # 执行动作并获得环境反馈
-            next_obs, reward, terminated, truncated, _ = self.env.step(clipped)
+            next_obs, reward, terminated, truncated, _ = self.env.step(action_clipped)
             done = bool(terminated or truncated)
 
-            # 保存轨迹数据
+            # 保存轨迹数据（存储实际执行的动作）
             traj.append(
                 {
                     "obs": np.asarray(self._obs, dtype=np.float32),
-                    "act": np.asarray(action, dtype=np.float32),
+                    "act": np.asarray(action_clipped, dtype=np.float32),
                     "logp": float(logp_t.item()),
                 }
             )

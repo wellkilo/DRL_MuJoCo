@@ -1,7 +1,7 @@
 # DRL MuJoCo Web UI 服务器
 #
 # 提供 Web 界面实时监控分布式训练过程
-# 功能：启动/停止训练、实时可视化训练指标、对比单机与分布式性能
+# 功能：启动/停止训练、实时可视化训练指标、对比单机与分布式性能、视频演示
 
 from __future__ import annotations
 
@@ -9,13 +9,19 @@ import asyncio
 import csv
 import json
 import subprocess
+import threading
 from pathlib import Path
-from typing import Any
+from typing import Any, Union
 
 from fastapi import FastAPI, WebSocket
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+
+# 添加项目根目录到路径
+import sys
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from drl.video_generator import generate_comparison_videos
 
 # 初始化 FastAPI 应用
 app = FastAPI(title="DRL MuJoCo Web UI")
@@ -32,6 +38,8 @@ templates = Jinja2Templates(directory=REPO_ROOT / "web/templates")
 # 全局变量
 training_task: asyncio.subprocess.Process | None = None  # 当前训练进程
 clients: list[WebSocket] = []  # WebSocket 客户端列表
+video_generation_process: asyncio.subprocess.Process | None = None  # 视频生成进程
+video_generation_status: dict[str, Any] = {"status": "idle"}  # 视频生成状态
 
 
 @app.get("/")
@@ -137,12 +145,15 @@ async def stop_training() -> dict[str, str]:
     """停止训练进程"""
     global training_task
     if training_task and training_task.returncode is None:
+        print("[Server] Stopping training, giving time to save model...", flush=True)
         # 先尝试优雅终止（SIGTERM）
         training_task.terminate()
         try:
-            # 等待 5 秒让进程正常退出
-            await asyncio.wait_for(training_task.wait(), timeout=5.0)
+            # 等待 15 秒让进程正常退出并保存模型
+            await asyncio.wait_for(training_task.wait(), timeout=15.0)
+            print("[Server] Training process exited gracefully", flush=True)
         except asyncio.TimeoutError:
+            print("[Server] Timeout, forcing training process to stop...", flush=True)
             # 超时则强制终止（SIGKILL）
             training_task.kill()
             await training_task.wait()
@@ -179,6 +190,156 @@ async def monitor_training() -> None:
 
         # 每秒更新一次
         await asyncio.sleep(1.0)
+
+
+# ==================== 视频生成 API ====================
+
+
+def _create_video_script() -> Path:
+    """创建临时视频生成脚本"""
+    script_content = '''#!/usr/bin/env python3
+import sys
+from pathlib import Path
+
+# 添加项目根目录
+sys.path.insert(0, str(Path(__file__).parent))
+
+from drl.video_generator import generate_video
+
+print("[Video Script] Starting...", flush=True)
+
+# 生成分布式视频
+config_path_distributed = str(Path(__file__).parent / "config" / "config.yaml")
+output_path_distributed = str(Path(__file__).parent / "output" / "video_distributed.mp4")
+print(f"[Video Script] Generating distributed video...", flush=True)
+result_dist = generate_video(
+    config_path=config_path_distributed,
+    output_path=output_path_distributed,
+    num_episodes=1,
+    max_steps=50,
+    fps=30
+)
+print(f"[Video Script] Distributed result: {result_dist}", flush=True)
+
+# 生成单机视频
+config_path_single = str(Path(__file__).parent / "config" / "config_single.yaml")
+output_path_single = str(Path(__file__).parent / "output" / "video_single.mp4")
+print(f"[Video Script] Generating single video...", flush=True)
+result_single = generate_video(
+    config_path=config_path_single,
+    output_path=output_path_single,
+    num_episodes=1,
+    max_steps=50,
+    fps=30
+)
+print(f"[Video Script] Single result: {result_single}", flush=True)
+
+print("[Video Script] Done!", flush=True)
+'''
+    script_path = REPO_ROOT / "temp_generate_videos.py"
+    script_path.write_text(script_content)
+    return script_path
+
+
+async def _monitor_video_process(process: asyncio.subprocess.Process) -> None:
+    """监控视频生成进程"""
+    global video_generation_status
+    
+    try:
+        video_generation_status = {"status": "generating", "progress": 0}
+        
+        # 读取输出
+        while process.returncode is None:
+            await asyncio.sleep(0.5)
+        
+        stdout, stderr = await process.communicate()
+        
+        if process.returncode == 0:
+            video_generation_status = {
+                "status": "completed",
+                "progress": 100
+            }
+            print("[Server] Video generation completed successfully!", flush=True)
+        else:
+            error_msg = stderr.decode() if stderr else "Unknown error"
+            video_generation_status = {
+                "status": "error",
+                "error": error_msg
+            }
+            print(f"[Server] Video generation failed: {error_msg}", flush=True)
+            
+    except Exception as e:
+        print(f"[Server] Error monitoring video process: {e}", flush=True)
+        import traceback
+        traceback.print_exc()
+        video_generation_status = {
+            "status": "error",
+            "error": str(e)
+        }
+
+
+@app.post("/api/videos/generate")
+async def generate_videos() -> dict[str, Any]:
+    """一键生成对比视频"""
+    global video_generation_process, video_generation_status
+    print("[Server] Received generate videos request")
+    
+    # 如果已有进程在运行，先终止它
+    if video_generation_process and video_generation_process.returncode is None:
+        print("[Server] Terminating existing video generation process...", flush=True)
+        video_generation_process.terminate()
+        try:
+            await asyncio.wait_for(video_generation_process.wait(), timeout=5.0)
+        except asyncio.TimeoutError:
+            video_generation_process.kill()
+            await video_generation_process.wait()
+    
+    # 创建临时脚本
+    script_path = _create_video_script()
+    
+    # 重置状态
+    video_generation_status = {"status": "idle"}
+    
+    print(f"[Server] Starting video generation process...", flush=True)
+    
+    # 使用子进程运行视频生成
+    video_generation_process = await asyncio.create_subprocess_exec(
+        sys.executable, str(script_path),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        cwd=str(REPO_ROOT)
+    )
+    
+    # 启动监控任务
+    asyncio.create_task(_monitor_video_process(video_generation_process))
+    
+    print(f"[Server] Video generation process started with PID: {video_generation_process.pid}", flush=True)
+    
+    return {"status": "started"}
+
+
+@app.get("/api/videos/status")
+async def get_video_status() -> dict[str, Any]:
+    """获取视频生成状态"""
+    return video_generation_status
+
+
+@app.get("/api/videos/distributed", response_model=None)
+async def get_distributed_video() -> Any:
+    """获取分布式训练视频"""
+    video_path = OUTPUT_DIR / "video_distributed.mp4"
+    if video_path.exists():
+        return FileResponse(video_path, media_type="video/mp4")
+    return {"error": "Video not found"}
+
+
+@app.get("/api/videos/single", response_model=None)
+async def get_single_video() -> Any:
+    """获取单机训练视频"""
+    video_path = OUTPUT_DIR / "video_single.mp4"
+    if video_path.exists():
+        return FileResponse(video_path, media_type="video/mp4")
+    return {"error": "Video not found"}
 
 
 if __name__ == "__main__":

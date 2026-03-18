@@ -1,5 +1,6 @@
 docs/
 __pycache__/
+.claude/
 output/
 *.pyc
 *.pyo

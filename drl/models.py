@@ -8,6 +8,8 @@ from __future__ import annotations
 import math
 
 import torch
+from torch.distributions import Normal, TransformedDistribution
+from torch.distributions.transforms import TanhTransform, AffineTransform
 
 
 class ActorCritic(torch.nn.Module):
@@ -102,3 +104,31 @@ class ActorCritic(torch.nn.Module):
         std = torch.exp(self.log_std)  # 将对数标准差转换为标准差
         dist = torch.distributions.Normal(mean, std)  # 构建高斯策略分布
         return dist, value
+
+    def get_squashed_dist_and_value(self, obs: torch.Tensor, action_low: torch.Tensor, action_high: torch.Tensor) -> tuple[TransformedDistribution, torch.Tensor]:
+        """
+        获取 Tanh-Squash 策略分布和价值
+        Args:
+            obs: 观测张量 [batch_size, obs_dim]
+            action_low: 动作空间下界 [action_dim]
+            action_high: 动作空间上界 [action_dim]
+        Returns:
+            dist: Tanh-Squash 变换分布（用于采样动作和计算概率）
+            value: 状态价值 [batch_size]
+        """
+        mean, value = self.forward(obs)
+        log_std = self.log_std.to(mean.device)
+        std = torch.exp(log_std)
+        base_dist = Normal(mean, std)
+        
+        # 确保 action_low 和 action_high 在正确的设备上
+        action_low = action_low.to(mean.device)
+        action_high = action_high.to(mean.device)
+        
+        # 计算 loc 和 scale
+        loc = (action_low + action_high) / 2.0
+        scale = (action_high - action_low) / 2.0
+        
+        transforms = [TanhTransform(), AffineTransform(loc=loc, scale=scale)]
+        squashed_dist = TransformedDistribution(base_dist, transforms)
+        return squashed_dist, value

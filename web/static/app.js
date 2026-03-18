@@ -293,3 +293,150 @@ function switchTab(tabName) {
 
 initCharts();
 refreshMetrics();
+
+let videoStatusCheckInterval = null;
+
+function setVideoStatus(text, statusClass) {
+    const statusEl = document.getElementById('videoStatus');
+    if (statusEl) {
+        statusEl.textContent = '视频状态: ' + text;
+        statusEl.className = 'video-status';
+        if (statusClass) {
+            statusEl.classList.add(statusClass);
+        }
+    }
+}
+
+async function generateVideos() {
+    try {
+        const genBtn = document.getElementById('genVideoBtn');
+        if (genBtn) {
+            genBtn.disabled = true;
+        }
+        setVideoStatus('正在生成视频...', 'generating');
+        
+        const resp = await fetch('/api/videos/generate', { method: 'POST' });
+        const data = await resp.json();
+        
+        if (data.status === 'started' || data.status === 'already_generating') {
+            startVideoStatusCheck();
+        }
+    } catch (e) {
+        console.error(e);
+        setVideoStatus('生成失败: ' + e.message, 'error');
+        const genBtn = document.getElementById('genVideoBtn');
+        if (genBtn) {
+            genBtn.disabled = false;
+        }
+    }
+}
+
+function startVideoStatusCheck() {
+    videoStatusCheckInterval = setInterval(checkVideoStatus, 1000);
+}
+
+let videoStatusMessage = '正在生成视频...';
+let statusDots = 0;
+
+async function checkVideoStatus() {
+    try {
+        const resp = await fetch('/api/videos/status');
+        const data = await resp.json();
+        
+        if (data.status === 'generating') {
+            statusDots = (statusDots + 1) % 4;
+            const dots = '.'.repeat(statusDots);
+            setVideoStatus('正在生成视频' + dots, 'generating');
+        } else if (data.status === 'completed') {
+            clearInterval(videoStatusCheckInterval);
+            setVideoStatus('视频生成完成！', 'completed');
+            const genBtn = document.getElementById('genVideoBtn');
+            if (genBtn) {
+                genBtn.disabled = false;
+            }
+            refreshVideos();
+        } else if (data.status === 'error') {
+            clearInterval(videoStatusCheckInterval);
+            setVideoStatus('生成失败: ' + data.error, 'error');
+            const genBtn = document.getElementById('genVideoBtn');
+            if (genBtn) {
+                genBtn.disabled = false;
+            }
+        }
+    } catch (e) {
+        console.error(e);
+    }
+}
+
+function refreshVideos() {
+    const videoDistributed = document.getElementById('videoDistributed');
+    const videoSingle = document.getElementById('videoSingle');
+    
+    if (videoDistributed) {
+        videoDistributed.load();
+    }
+    if (videoSingle) {
+        videoSingle.load();
+    }
+}
+
+function playAllVideos() {
+    const videoDistributed = document.getElementById('videoDistributed');
+    const videoSingle = document.getElementById('videoSingle');
+    
+    if (videoDistributed) {
+        videoDistributed.play();
+    }
+    if (videoSingle) {
+        videoSingle.play();
+    }
+}
+
+function pauseAllVideos() {
+    const videoDistributed = document.getElementById('videoDistributed');
+    const videoSingle = document.getElementById('videoSingle');
+    
+    if (videoDistributed) {
+        videoDistributed.pause();
+    }
+    if (videoSingle) {
+        videoSingle.pause();
+    }
+}
+
+function resetAllVideos() {
+    const videoDistributed = document.getElementById('videoDistributed');
+    const videoSingle = document.getElementById('videoSingle');
+    
+    if (videoDistributed) {
+        videoDistributed.currentTime = 0;
+        videoDistributed.pause();
+    }
+    if (videoSingle) {
+        videoSingle.currentTime = 0;
+        videoSingle.pause();
+    }
+}
+
+function setupVideoSync() {
+    const videoDistributed = document.getElementById('videoDistributed');
+    const videoSingle = document.getElementById('videoSingle');
+    
+    if (videoDistributed && videoSingle) {
+        videoDistributed.addEventListener('timeupdate', function() {
+            syncVideoPlayback(videoDistributed, videoSingle);
+        });
+        videoSingle.addEventListener('timeupdate', function() {
+            syncVideoPlayback(videoSingle, videoDistributed);
+        });
+    }
+}
+
+function syncVideoPlayback(source, target) {
+    if (Math.abs(source.currentTime - target.currentTime) > 0.1) {
+        target.currentTime = source.currentTime;
+    }
+}
+
+setupVideoSync();
+
