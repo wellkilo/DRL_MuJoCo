@@ -418,25 +418,5 @@ function resetAllVideos() {
     }
 }
 
-function setupVideoSync() {
-    const videoDistributed = document.getElementById('videoDistributed');
-    const videoSingle = document.getElementById('videoSingle');
-    
-    if (videoDistributed && videoSingle) {
-        videoDistributed.addEventListener('timeupdate', function() {
-            syncVideoPlayback(videoDistributed, videoSingle);
-        });
-        videoSingle.addEventListener('timeupdate', function() {
-            syncVideoPlayback(videoSingle, videoDistributed);
-        });
-    }
-}
 
-function syncVideoPlayback(source, target) {
-    if (Math.abs(source.currentTime - target.currentTime) > 0.1) {
-        target.currentTime = source.currentTime;
-    }
-}
-
-setupVideoSync();
 

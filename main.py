@@ -235,6 +235,17 @@ def main() -> None:
                     }
                 )
                 metrics_file.flush()  # 立即写入文件
+                
+                # 定期保存模型，确保视频生成时能拿到最新的模型
+                print(f"[Main] Saving model at step {step}...", flush=True)
+                try:
+                    current_state = ray.get(learner.get_state.remote())
+                    config_name = Path(config_path).stem
+                    model_path = OUTPUT_DIR / f"model_{config_name}.pt"
+                    torch.save(current_state, model_path)
+                    print(f"[Main] Model saved to {model_path}", flush=True)
+                except Exception as e:
+                    print(f"[Main] Error saving model: {e}", flush=True)
 
         # 避免过度占用 CPU
         time.sleep(0.01)

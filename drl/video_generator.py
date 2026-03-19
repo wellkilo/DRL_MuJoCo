@@ -94,7 +94,8 @@ def generate_video(
             video_folder=str(output_dir_path),
             name_prefix=video_prefix,
             episode_trigger=lambda x: True,  # 录制所有回合
-            disable_logger=False
+            disable_logger=False,
+            fps=fps
         )
         obs_dim = int(np.asarray(env.observation_space.shape[0]))
         action_dim = int(np.asarray(env.action_space.shape[0]))
@@ -165,9 +166,11 @@ def generate_video(
                     print(f"[Video Generator]   Step {step}: Error stepping environment: {e}", flush=True)
                     break
                 
+                # 即使环境终止，我们也继续运行，直到达到 max_steps
                 if terminated or truncated:
-                    print(f"[Video Generator]   Episode ended at step {step}", flush=True)
-                    break
+                    print(f"[Video Generator]   Episode terminated at step {step}, continuing to run to max_steps...", flush=True)
+                    # 继续运行但不重置环境，确保达到完整的步数
+                    # 保持 terminated 状态但继续执行
             
             print(f"[Video Generator] Episode {episode + 1} completed", flush=True)
         
