@@ -89,15 +89,18 @@ async def websocket_training(websocket: WebSocket) -> None:
     """
     await websocket.accept()
     clients.append(websocket)
+    print(f"[WebSocket] New client connected. Total clients: {len(clients)}", flush=True)
     try:
         # 保持连接活跃
         while True:
             await asyncio.sleep(0.1)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[WebSocket] Error: {e}", flush=True)
     finally:
         # 断开连接时移除客户端
-        clients.remove(websocket)
+        if websocket in clients:
+            clients.remove(websocket)
+        print(f"[WebSocket] Client disconnected. Total clients: {len(clients)}", flush=True)
 
 
 @app.post("/api/training/distributed/start")
@@ -106,6 +109,9 @@ async def start_training_distributed() -> dict[str, str]:
     global training_task
     if training_task and training_task.returncode is None:
         return {"status": "already running"}
+
+    # 确保 output 目录存在
+    OUTPUT_DIR.mkdir(exist_ok=True)
 
     # 创建子进程运行训练
     training_task = await asyncio.create_subprocess_exec(
@@ -117,6 +123,8 @@ async def start_training_distributed() -> dict[str, str]:
 
     # 启动监控任务
     asyncio.create_task(monitor_training())
+    # 启动输出监控任务
+    asyncio.create_task(monitor_training_output())
     return {"status": "started"}
 
 
@@ -126,6 +134,9 @@ async def start_training_single() -> dict[str, str]:
     global training_task
     if training_task and training_task.returncode is None:
         return {"status": "already running"}
+
+    # 确保 output 目录存在
+    OUTPUT_DIR.mkdir(exist_ok=True)
 
     # 创建子进程运行单机训练
     training_task = await asyncio.create_subprocess_exec(
@@ -137,6 +148,8 @@ async def start_training_single() -> dict[str, str]:
 
     # 启动监控任务
     asyncio.create_task(monitor_training())
+    # 启动输出监控任务
+    asyncio.create_task(monitor_training_output())
     return {"status": "started"}
 
 
@@ -162,6 +175,23 @@ async def stop_training() -> dict[str, str]:
 
 # ==================== 监控任务 ====================
 
+async def monitor_training_output() -> None:
+    """监控训练进程的输出并打印到控制台"""
+    if not training_task or not training_task.stdout:
+        return
+    print("[Training Output] Starting to monitor training output...", flush=True)
+    try:
+        while True:
+            line = await training_task.stdout.readline()
+            if not line:
+                break
+            print(f"[Training Output] {line.decode().rstrip()}", flush=True)
+    except Exception as e:
+        print(f"[Training Output] Error: {e}", flush=True)
+    finally:
+        print("[Training Output] Training output monitoring ended.", flush=True)
+
+
 async def monitor_training() -> None:
     """
     监控训练进程并实时推送指标
@@ -170,11 +200,14 @@ async def monitor_training() -> None:
     if not training_task:
         return
 
+    print("[Monitor] Starting monitoring...", flush=True)
     # 当训练进程运行时持续监控
     while training_task.returncode is None:
         # 获取分布式和单机训练的最新指标
-        dist_metrics = await get_metrics_distributed()
-        single_metrics = await get_metrics_single()
+        dist_metrics = load_metrics_file(OUTPUT_DIR / "metrics.csv")
+        single_metrics = load_metrics_file(OUTPUT_DIR / "metrics_single.csv")
+        
+        print(f"[Monitor] Got {len(dist_metrics)} dist metrics, {len(single_metrics)} single metrics, {len(clients)} clients", flush=True)
 
         # 向所有连接的客户端推送数据
         for client in clients:
@@ -184,12 +217,16 @@ async def monitor_training() -> None:
                     "distributed": dist_metrics,
                     "single": single_metrics
                 }))
-            except Exception:
+                print(f"[Monitor] Sent data to client", flush=True)
+            except Exception as e:
+                print(f"[Monitor] Failed to send to client: {e}", flush=True)
                 # 发送失败可能是客户端断开连接
                 pass
 
         # 每秒更新一次
         await asyncio.sleep(1.0)
+    
+    print("[Monitor] Training stopped, monitoring ended.", flush=True)
 
 
 # ==================== 视频生成 API ====================
