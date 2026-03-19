@@ -43,6 +43,13 @@ def save_model_and_exit(signum: int, frame: Any) -> None:
             print(f"[Main] Saving to: {model_path}", flush=True)
             torch.save(final_state, model_path)
             print(f"[Main] Model saved to {model_path}", flush=True)
+            
+            # 打印最佳模型信息
+            if "best_avg_return" in global_state:
+                print(f"[Main] Best avg return during training: {global_state['best_avg_return']:.2f}", flush=True)
+                best_model_path = global_state["OUTPUT_DIR"] / f"model_{config_name}_best.pt"
+                if best_model_path.exists():
+                    print(f"[Main] Best model is available at: {best_model_path}", flush=True)
         else:
             print(f"[Main] Missing required keys in global state", flush=True)
     except Exception as e:
@@ -80,9 +87,16 @@ def main() -> None:
     OUTPUT_DIR = Path("output")
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     
+    # 清理旧的 metrics 文件，避免字段不匹配的问题
+    metrics_path = Path(cfg.metrics_path)
+    if metrics_path.exists():
+        print(f"[Main] Removing old metrics file: {metrics_path}", flush=True)
+        metrics_path.unlink()
+    
     # 保存全局状态
     global_state["config_path"] = config_path
     global_state["OUTPUT_DIR"] = OUTPUT_DIR
+    global_state["best_avg_return"] = -float('inf')
     
     # 注册信号处理函数
     signal.signal(signal.SIGINT, save_model_and_exit)   # Ctrl+C
@@ -165,6 +179,7 @@ def main() -> None:
     total_steps = 0          # 总采样步数
     total_episodes = 0        # 总回合数
     total_return_sum = 0.0    # 累计回报总和
+    best_avg_return = -float('inf')  # 最佳平均回报
     for step in range(cfg.max_iters):
         # 等待至少一个 Actor 完成采样（非阻塞）
         done_ids, _ = ray.wait(list(actor_tasks.keys()), num_returns=len(actor_tasks), timeout=0)
@@ -244,6 +259,14 @@ def main() -> None:
                     model_path = OUTPUT_DIR / f"model_{config_name}.pt"
                     torch.save(current_state, model_path)
                     print(f"[Main] Model saved to {model_path}", flush=True)
+                    
+                    # 检查是否为最佳模型，如果是则保存
+                    if not math.isnan(avg_return) and avg_return > best_avg_return:
+                        best_avg_return = avg_return
+                        global_state["best_avg_return"] = best_avg_return
+                        best_model_path = OUTPUT_DIR / f"model_{config_name}_best.pt"
+                        torch.save(current_state, best_model_path)
+                        print(f"[Main] Best model saved to {best_model_path} with avg_return {best_avg_return:.2f}", flush=True)
                 except Exception as e:
                     print(f"[Main] Error saving model: {e}", flush=True)
 
@@ -256,6 +279,10 @@ def main() -> None:
     model_path = OUTPUT_DIR / f"model_{config_name}.pt"
     torch.save(final_state, model_path)
     print(f"Model saved to {model_path}")
+    print(f"Best avg return during training: {best_avg_return:.2f}")
+    best_model_path = OUTPUT_DIR / f"model_{config_name}_best.pt"
+    if best_model_path.exists():
+        print(f"Best model is available at: {best_model_path}")
 
     # 关闭文件
     metrics_file.close()

@@ -160,6 +160,7 @@ function updateComparisonChart(chart, distMetrics, singleMetrics, key) {
  * @param {MetricsPoint[]} singleMetrics
  */
 function updateAllCharts(distMetrics, singleMetrics) {
+    console.log('[Frontend] updateAllCharts called with:', { distMetrics, singleMetrics });
     if (distMetrics.length > 0) {
         updateSingleChart(charts.distSps, distMetrics, 'sps', 'Distributed SPS');
         updateSingleChart(charts.distReturn, distMetrics, 'avg_return', 'Distributed Return');
@@ -264,15 +265,25 @@ async function refreshMetrics() {
 }
 
 function connectWebSocket() {
+    console.log('[Frontend] Connecting WebSocket...');
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     ws = new WebSocket(`${protocol}//${window.location.host}/ws/training`);
+    ws.onopen = () => {
+        console.log('[Frontend] WebSocket connected!');
+    };
     ws.onmessage = (event) => {
+        console.log('[Frontend] Received message:', event.data);
         const msg = JSON.parse(event.data);
         if (msg.type === 'metrics') {
+            console.log('[Frontend] Updating charts with:', msg.distributed, msg.single);
             updateAllCharts(msg.distributed || [], msg.single || []);
         }
     };
+    ws.onerror = (error) => {
+        console.error('[Frontend] WebSocket error:', error);
+    };
     ws.onclose = () => {
+        console.log('[Frontend] WebSocket closed');
         if (isRunning) {
             setTimeout(connectWebSocket, 1000);
         }

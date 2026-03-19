@@ -110,23 +110,33 @@ def generate_video(
             hidden_sizes=cfg.hidden_sizes
         )
         
-        # 尝试加载模型
+        # 尝试加载模型 - 优先加载最佳模型
         config_name = Path(config_path).stem
+        best_model_path = Path(output_path).parent / f"model_{config_name}_best.pt"
         model_path = Path(output_path).parent / f"model_{config_name}.pt"
-        print(f"[Video Generator] Looking for model at {model_path}", flush=True)
-        if model_path.exists():
+        
+        # 优先尝试加载最佳模型
+        selected_model_path = None
+        if best_model_path.exists():
+            selected_model_path = best_model_path
+            print(f"[Video Generator] Found best model at {best_model_path}, using it", flush=True)
+        elif model_path.exists():
+            selected_model_path = model_path
+            print(f"[Video Generator] Best model not found, using regular model at {model_path}", flush=True)
+        else:
+            print(f"[Video Generator] No model files found, using random initialization", flush=True)
+        
+        if selected_model_path:
             try:
-                state_dict = torch.load(model_path, map_location="cpu")
+                state_dict = torch.load(selected_model_path, map_location="cpu")
                 if "actor" in state_dict:
                     model.load_state_dict(state_dict["actor"])
                 else:
                     model.load_state_dict(state_dict)
-                print(f"[Video Generator] Model loaded successfully from {model_path}", flush=True)
+                print(f"[Video Generator] Model loaded successfully from {selected_model_path}", flush=True)
             except Exception as e:
                 print(f"[Video Generator] Error loading model: {e}", flush=True)
                 print(f"[Video Generator] Using random initialization", flush=True)
-        else:
-            print(f"[Video Generator] Model file {model_path} not found, using random initialization", flush=True)
         
         model.eval()
         
