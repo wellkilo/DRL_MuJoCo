@@ -216,7 +216,7 @@ result_dist = generate_video(
     config_path=config_path_distributed,
     output_path=output_path_distributed,
     num_episodes=1,
-    max_steps=50,
+    max_steps=180,
     fps=30
 )
 print(f"[Video Script] Distributed result: {result_dist}", flush=True)
@@ -229,7 +229,7 @@ result_single = generate_video(
     config_path=config_path_single,
     output_path=output_path_single,
     num_episodes=1,
-    max_steps=50,
+    max_steps=120,
     fps=30
 )
 print(f"[Video Script] Single result: {result_single}", flush=True)
