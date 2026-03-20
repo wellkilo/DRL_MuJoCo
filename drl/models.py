@@ -51,7 +51,7 @@ class ActorCritic(torch.nn.Module):
         self.value_head = torch.nn.Linear(sizes[1], 1)
 
         # 可学习的对数标准差参数（用于构建高斯策略）
-        self.log_std = torch.nn.Parameter(torch.zeros(action_dim))
+        self.log_std = torch.nn.Parameter(-0.5 * torch.ones(action_dim))
 
         # 初始化网络权重
         self._init_weights()
@@ -101,8 +101,11 @@ class ActorCritic(torch.nn.Module):
             value: 状态价值 [batch_size]
         """
         mean, value = self.forward(obs)
-        std = torch.exp(self.log_std)  # 将对数标准差转换为标准差
-        dist = torch.distributions.Normal(mean, std)  # 构建高斯策略分布
+        LOG_STD_MIN = -20.0
+        LOG_STD_MAX = 2.0
+        log_std_clamped = torch.clamp(self.log_std, LOG_STD_MIN, LOG_STD_MAX)
+        std = torch.exp(log_std_clamped)
+        dist = torch.distributions.Normal(mean, std)
         return dist, value
 
     def get_squashed_dist_and_value(self, obs: torch.Tensor, action_low: torch.Tensor, action_high: torch.Tensor) -> tuple[TransformedDistribution, torch.Tensor]:

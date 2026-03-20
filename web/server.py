@@ -63,7 +63,15 @@ def load_metrics_file(metrics_path: Path) -> list[dict[str, Any]]:
         reader = csv.DictReader(f)
         # 转换数据类型：步数和回合数为整数，其他为浮点数
         for row in reader:
-            metrics.append({k: float(v) if k not in ("step", "episodes") else int(float(v)) for k, v in row.items()})
+            converted_row = {}
+            for k, v in row.items():
+                if v == "":
+                    converted_row[k] = float("nan")
+                elif k in ("step", "episodes"):
+                    converted_row[k] = int(float(v))
+                else:
+                    converted_row[k] = float(v)
+            metrics.append(converted_row)
     return metrics
 
 
