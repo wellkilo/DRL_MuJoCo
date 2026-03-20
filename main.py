@@ -5,11 +5,15 @@ from __future__ import annotations
 
 import csv
 import math
+import os
 import signal
 import sys
 import time
 from pathlib import Path
 from typing import Any
+
+# 设置Ray环境变量以消除FutureWarning
+os.environ["RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO"] = "0"
 
 import numpy as np
 import ray

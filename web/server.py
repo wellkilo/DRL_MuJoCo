@@ -210,7 +210,8 @@ async def monitor_training() -> None:
         print(f"[Monitor] Got {len(dist_metrics)} dist metrics, {len(single_metrics)} single metrics, {len(clients)} clients", flush=True)
 
         # 向所有连接的客户端推送数据
-        for client in clients:
+        # 创建副本遍历，避免在遍历过程中修改列表
+        for client in clients.copy():
             try:
                 await client.send_text(json.dumps({
                     "type": "metrics",
@@ -220,8 +221,10 @@ async def monitor_training() -> None:
                 print(f"[Monitor] Sent data to client", flush=True)
             except Exception as e:
                 print(f"[Monitor] Failed to send to client: {e}", flush=True)
-                # 发送失败可能是客户端断开连接
-                pass
+                # 发送失败，从客户端列表中移除
+                if client in clients:
+                    clients.remove(client)
+                print(f"[Monitor] Removed disconnected client. Total clients: {len(clients)}", flush=True)
 
         # 每秒更新一次
         await asyncio.sleep(1.0)
