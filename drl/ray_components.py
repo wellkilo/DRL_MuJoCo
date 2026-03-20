@@ -37,37 +37,32 @@ class ParameterServer:
 @ray.remote
 class ReplayBuffer:
     """
-    经验回放池（Replay Buffer）
+    经验存储（On-policy Data Store）
     功能：
-    1. 存储所有 Actor 采集的经验轨迹
-    2. 为 Learner 提供训练数据
-    3. 实现经验的重用和解耦
+    1. 存储当前策略最新采集的经验轨迹
+    2. 为 Learner 提供完整的最新数据进行训练
+    3. 训练后清空数据，确保只使用同策略数据
     """
     def __init__(self, capacity: int) -> None:
-        # 使用双端队列实现固定容量的经验池
-        self._buffer: deque[dict[str, Any]] = deque(maxlen=capacity)
+        self._buffer: list[dict[str, Any]] = []
+        self._capacity = capacity
 
     def add(self, items: list[dict[str, Any]]) -> None:
-        """添加一批经验到回放池"""
+        """添加一批经验到存储"""
         self._buffer.extend(items)
+        if len(self._buffer) > self._capacity:
+            self._buffer = self._buffer[-self._capacity:]
 
-    def sample(self, batch_size: int) -> list[dict[str, Any]]:
-        """
-        从回放池随机采样一批经验
-        Args:
-            batch_size: 采样批次大小
-        Returns:
-            采样的经验列表
-        """
-        batch_size = min(batch_size, len(self._buffer))
-        if batch_size <= 0:
-            return []
-        # 随机无放回采样
-        indices = np.random.choice(len(self._buffer), batch_size, replace=False)
-        return [self._buffer[i] for i in indices]
+    def get_all(self) -> list[dict[str, Any]]:
+        """获取所有当前存储的经验"""
+        return self._buffer.copy()
+
+    def clear(self) -> None:
+        """清空存储（训练后调用）"""
+        self._buffer = []
 
     def size(self) -> int:
-        """返回当前回放池中的经验数量"""
+        """返回当前存储中的经验数量"""
         return len(self._buffer)
 
 
@@ -364,7 +359,7 @@ class Learner:
 
     def train_step(self, updates: int) -> dict[str, Any]:
         """
-        执行多轮训练更新
+        执行多轮训练更新（On-policy 方式）
         Args:
             updates: 训练更新轮数
         Returns:
@@ -372,38 +367,55 @@ class Learner:
         """
         metrics_acc: dict[str, float] = {}  # 累积指标
 
+        # 获取所有最新的 on-policy 数据
+        all_data = ray.get(self.replay_buffer.get_all.remote())
+        if not all_data:
+            return {"state_dict": self.model.state_dict(), "metrics": {}}
+
+        batch_size = int(self.cfg["batch_size"])
+        num_samples = len(all_data)
+
         # 执行多轮梯度更新
         for _ in range(int(updates)):
-            # 从经验回放池采样一个批次
-            batch = ray.get(self.replay_buffer.sample.remote(int(self.cfg["batch_size"])))
-            if not batch:
-                continue
+            # 对数据进行随机打乱
+            indices = np.random.permutation(num_samples)
+            
+            # 分批训练
+            for start_idx in range(0, num_samples, batch_size):
+                end_idx = min(start_idx + batch_size, num_samples)
+                batch_indices = indices[start_idx:end_idx]
+                batch = [all_data[i] for i in batch_indices]
 
-            # 将批量数据转换为张量
-            batch_t = _to_tensor(batch, self.device)
+                # 将批量数据转换为张量
+                batch_t = _to_tensor(batch, self.device)
 
-            # 计算 PPO 损失和指标
-            loss, metrics = _ppo_loss(
-                self.model,
-                batch_t,
-                clip_ratio=float(self.cfg["clip_ratio"]),
-                vf_coef=float(self.cfg["vf_coef"]),
-                ent_coef=float(self.cfg["ent_coef"]),
-            )
+                # 计算 PPO 损失和指标
+                loss, metrics = _ppo_loss(
+                    self.model,
+                    batch_t,
+                    clip_ratio=float(self.cfg["clip_ratio"]),
+                    vf_coef=float(self.cfg["vf_coef"]),
+                    ent_coef=float(self.cfg["ent_coef"]),
+                )
 
-            # 反向传播更新参数
-            self.optimizer.zero_grad(set_to_none=True)
-            loss.backward()
-            self.optimizer.step()
+                # 反向传播更新参数
+                self.optimizer.zero_grad(set_to_none=True)
+                loss.backward()
+                self.optimizer.step()
 
-            # 累积指标
-            for k, v in metrics.items():
-                metrics_acc[k] = metrics_acc.get(k, 0.0) + float(v)
+                # 累积指标
+                for k, v in metrics.items():
+                    metrics_acc[k] = metrics_acc.get(k, 0.0) + float(v)
 
         # 计算平均指标
-        if metrics_acc:
+        num_batches = (num_samples + batch_size - 1) // batch_size
+        total_updates = int(updates) * num_batches
+        if metrics_acc and total_updates > 0:
             for k in list(metrics_acc.keys()):
-                metrics_acc[k] /= float(updates)
+                metrics_acc[k] /= float(total_updates)
+
+        # 清空数据存储，确保下次只使用新采集的数据
+        ray.get(self.replay_buffer.clear.remote())
 
         # 返回更新后的模型状态和指标
         return {"state_dict": self.model.state_dict(), "metrics": metrics_acc}

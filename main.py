@@ -174,101 +174,112 @@ def main() -> None:
     )
     metrics_writer.writeheader()
 
-    # 训练主循环
+    # 训练主循环 - On-policy PPO（标准同步流程）
     start_time = time.time()
     total_steps = 0          # 总采样步数
     total_episodes = 0        # 总回合数
     total_return_sum = 0.0    # 累计回报总和
     best_avg_return = -float('inf')  # 最佳平均回报
-    for step in range(cfg.max_iters):
-        # 等待至少一个 Actor 完成采样（非阻塞）
-        done_ids, _ = ray.wait(list(actor_tasks.keys()), num_returns=len(actor_tasks), timeout=0)
+    
+    # 目标样本数量：所有 Actor 各采集一个 rollout_length 的数据
+    target_samples = cfg.num_actors * cfg.rollout_length
+    
+    for train_step in range(cfg.max_iters):
+        # 阶段1：等待所有 Actor 完成采样（同步收集）
+        print(f"[Main] Train step {train_step}: Collecting samples...", flush=True)
+        done_ids, _ = ray.wait(list(actor_tasks.keys()), num_returns=len(actor_tasks))
 
-        # 获取当前最新模型参数
+        # 获取当前模型参数
         current_params = ray.get(param_server.get.remote())
 
-        # 处理已完成的采样任务
+        # 处理所有已完成的采样任务
         for done_id in done_ids:
             actor = actor_tasks.pop(done_id)
             traj, stats = ray.get(done_id)  # 获取轨迹和统计信息
 
-            # 将轨迹存入经验回放池
+            # 将轨迹存入数据存储
             if traj:
                 ray.get(replay_buffer.add.remote(traj))
-
-            # 让该 Actor 使用最新参数继续采样
-            actor_tasks[actor.sample.remote(current_params, cfg.rollout_length, cfg.gamma, cfg.gae_lambda)] = actor
 
             # 累计统计信息
             traj_len = len(traj)
             total_steps += traj_len
             total_episodes += int(stats.get("episodes", 0))
             total_return_sum += float(stats.get("episode_return_sum", 0.0))
-            log_event("actor_sample", {"step": step, **stats, "traj_len": traj_len})
+            log_event("actor_sample", {"step": train_step, **stats, "traj_len": traj_len})
 
-        # 当经验池数据量足够时，进行学习更新
+        # 阶段2：进行一次完整的 on-policy 学习更新
         size = ray.get(replay_buffer.size.remote())
-        if size >= cfg.batch_size:
-            # Learner 进行多轮梯度更新
-            train_out = ray.get(learner.train_step.remote(cfg.learner_updates_per_iter))
+        print(f"[Main] Train step {train_step}: Collected {size} samples, starting training...", flush=True)
+        
+        # Learner 进行多轮梯度更新
+        train_out = ray.get(learner.train_step.remote(cfg.learner_updates_per_iter))
 
-            # 将更新后的模型参数同步到 ParameterServer
-            ray.get(param_server.set.remote(train_out["state_dict"]))
+        # 将更新后的模型参数同步到 ParameterServer
+        ray.get(param_server.set.remote(train_out["state_dict"]))
+        
+        # 获取最新参数供 Actor 使用
+        current_params = ray.get(param_server.get.remote())
 
-            # 定期记录和保存训练指标
-            if step % cfg.log_interval == 0:
-                elapsed = time.time() - start_time
-                sps = total_steps / elapsed if elapsed > 0 else 0.0
-                avg_return = total_return_sum / total_episodes if total_episodes > 0 else math.nan
-                log_event(
-                    "learner_update",
-                    {
-                        "step": step,
-                        "buffer_size": size,
-                        "elapsed_sec": elapsed,
-                        "total_steps": total_steps,
-                        "sps": sps,
-                        "episodes": total_episodes,
-                        "avg_return": avg_return,
-                        **train_out["metrics"],
-                    },
-                )
-                metrics_writer.writerow(
-                    {
-                        "step": step,
-                        "elapsed_sec": elapsed,
-                        "total_steps": total_steps,
-                        "sps": sps,
-                        "episodes": total_episodes,
-                        "avg_return": avg_return,
-                        "buffer_size": size,
-                        "loss": train_out["metrics"].get("loss", math.nan),
-                        "policy_loss": train_out["metrics"].get("policy_loss", math.nan),
-                        "value_loss": train_out["metrics"].get("value_loss", math.nan),
-                        "entropy": train_out["metrics"].get("entropy", math.nan),
-                        "ratio": train_out["metrics"].get("ratio", math.nan),
-                    }
-                )
-                metrics_file.flush()  # 立即写入文件
-                
-                # 定期保存模型，确保视频生成时能拿到最新的模型
-                print(f"[Main] Saving model at step {step}...", flush=True)
-                try:
-                    current_state = ray.get(learner.get_state.remote())
-                    config_name = Path(config_path).stem
-                    model_path = OUTPUT_DIR / f"model_{config_name}.pt"
-                    torch.save(current_state, model_path)
-                    print(f"[Main] Model saved to {model_path}", flush=True)
-                    
-                    # 检查是否为最佳模型，如果是则保存
-                    if not math.isnan(avg_return) and avg_return > best_avg_return:
-                        best_avg_return = avg_return
-                        global_state["best_avg_return"] = best_avg_return
-                        best_model_path = OUTPUT_DIR / f"model_{config_name}_best.pt"
-                        torch.save(current_state, best_model_path)
-                        print(f"[Main] Best model saved to {best_model_path} with avg_return {best_avg_return:.2f}", flush=True)
-                except Exception as e:
-                    print(f"[Main] Error saving model: {e}", flush=True)
+        # 记录和保存训练指标
+        elapsed = time.time() - start_time
+        sps = total_steps / elapsed if elapsed > 0 else 0.0
+        avg_return = total_return_sum / total_episodes if total_episodes > 0 else math.nan
+        log_event(
+            "learner_update",
+            {
+                "step": train_step,
+                "buffer_size": size,
+                "elapsed_sec": elapsed,
+                "total_steps": total_steps,
+                "sps": sps,
+                "episodes": total_episodes,
+                "avg_return": avg_return,
+                **train_out["metrics"],
+            },
+        )
+        metrics_writer.writerow(
+            {
+                "step": train_step,
+                "elapsed_sec": elapsed,
+                "total_steps": total_steps,
+                "sps": sps,
+                "episodes": total_episodes,
+                "avg_return": avg_return,
+                "buffer_size": size,
+                "loss": train_out["metrics"].get("loss", math.nan),
+                "policy_loss": train_out["metrics"].get("policy_loss", math.nan),
+                "value_loss": train_out["metrics"].get("value_loss", math.nan),
+                "entropy": train_out["metrics"].get("entropy", math.nan),
+                "ratio": train_out["metrics"].get("ratio", math.nan),
+            }
+        )
+        metrics_file.flush()  # 立即写入文件
+        
+        # 定期保存模型
+        print(f"[Main] Saving model at train step {train_step}...", flush=True)
+        try:
+            current_state = ray.get(learner.get_state.remote())
+            config_name = Path(config_path).stem
+            model_path = OUTPUT_DIR / f"model_{config_name}.pt"
+            torch.save(current_state, model_path)
+            print(f"[Main] Model saved to {model_path}", flush=True)
+            
+            # 检查是否为最佳模型，如果是则保存
+            if not math.isnan(avg_return) and avg_return > best_avg_return:
+                best_avg_return = avg_return
+                global_state["best_avg_return"] = best_avg_return
+                best_model_path = OUTPUT_DIR / f"model_{config_name}_best.pt"
+                torch.save(current_state, best_model_path)
+                print(f"[Main] Best model saved to {best_model_path} with avg_return {best_avg_return:.2f}", flush=True)
+        except Exception as e:
+            print(f"[Main] Error saving model: {e}", flush=True)
+        
+        # 阶段3：让所有 Actor 使用最新参数继续采样（为下一轮准备）
+        actor_tasks = {
+            actor.sample.remote(current_params, cfg.rollout_length, cfg.gamma, cfg.gae_lambda): actor 
+            for actor in actors
+        }
 
         # 避免过度占用 CPU
         time.sleep(0.01)
