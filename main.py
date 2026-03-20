@@ -12,8 +12,9 @@ import time
 from pathlib import Path
 from typing import Any
 
-# 设置Ray环境变量以消除FutureWarning
+# 设置Ray环境变量以消除FutureWarning和metrics警告
 os.environ["RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO"] = "0"
+os.environ["RAY_metrics_export_port"] = "0"
 
 import numpy as np
 import ray
@@ -174,6 +175,11 @@ def main() -> None:
             "value_loss",  # 价值损失
             "entropy",     # 策略熵（探索程度）
             "ratio",       # PPO 重要性采样比率
+            "approx_kl",   # 近似 KL 散度
+            "clip_fraction", # 被裁剪的比例
+            "explained_var", # 价值函数的解释方差
+            "grad_norm",   # 梯度范数
+            "lr",          # 当前学习率
         ],
     )
     metrics_writer.writeheader()
@@ -196,10 +202,12 @@ def main() -> None:
         # 获取当前模型参数
         current_params = ray.get(param_server.get.remote())
 
+        # 批量获取所有结果（减少通信开销）
+        results = ray.get(done_ids)
+        
         # 处理所有已完成的采样任务
-        for done_id in done_ids:
+        for done_id, (traj, stats) in zip(done_ids, results):
             actor = actor_tasks.pop(done_id)
-            traj, stats = ray.get(done_id)  # 获取轨迹和统计信息
 
             # 将轨迹存入数据存储
             if traj:
@@ -219,11 +227,10 @@ def main() -> None:
         # Learner 进行多轮梯度更新
         train_out = ray.get(learner.train_step.remote(cfg.learner_updates_per_iter))
 
-        # 将更新后的模型参数同步到 ParameterServer
-        ray.get(param_server.set.remote(train_out["state_dict"]))
-        
-        # 获取最新参数供 Actor 使用
-        current_params = ray.get(param_server.get.remote())
+        # 直接使用 train_out 中的参数，避免冗余 RPC
+        current_params = train_out["state_dict"]
+        # 将更新后的模型参数同步到 ParameterServer（保持一致性）
+        ray.get(param_server.set.remote(current_params))
 
         # 记录和保存训练指标
         elapsed = time.time() - start_time
@@ -256,6 +263,11 @@ def main() -> None:
                 "value_loss": train_out["metrics"].get("value_loss", math.nan),
                 "entropy": train_out["metrics"].get("entropy", math.nan),
                 "ratio": train_out["metrics"].get("ratio", math.nan),
+                "approx_kl": train_out["metrics"].get("approx_kl", math.nan),
+                "clip_fraction": train_out["metrics"].get("clip_fraction", math.nan),
+                "explained_var": train_out["metrics"].get("explained_var", math.nan),
+                "grad_norm": train_out["metrics"].get("grad_norm", math.nan),
+                "lr": train_out["metrics"].get("lr", math.nan),
             }
         )
         metrics_file.flush()  # 立即写入文件

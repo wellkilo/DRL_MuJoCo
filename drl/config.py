@@ -47,3 +47,8 @@ class Config:
 
     # ==================== Ray 配置 ====================
     ray_address: str | None = None   # Ray 集群地址（None 表示本地模式）
+
+    # ==================== 新增：算法优化配置 ====================
+    max_grad_norm: float = 0.5       # 梯度裁剪阈值（防止梯度爆炸）
+    target_kl: float = 0.015         # KL 散度早停阈值（防止过度更新）
+    lr_schedule: str = "linear"       # 学习率调度：'constant' 或 'linear'

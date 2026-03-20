@@ -45,13 +45,12 @@ class ReplayBuffer:
     """
     def __init__(self, capacity: int) -> None:
         self._buffer: list[dict[str, Any]] = []
-        self._capacity = capacity
+        # capacity 参数保留以保持 API 兼容，但 on-policy 算法不使用容量限制
 
     def add(self, items: list[dict[str, Any]]) -> None:
         """添加一批经验到存储"""
         self._buffer.extend(items)
-        if len(self._buffer) > self._capacity:
-            self._buffer = self._buffer[-self._capacity:]
+        # 移除容量限制：on-policy 算法每次迭代后都会清空 buffer
 
     def get_all(self) -> list[dict[str, Any]]:
         """获取所有当前存储的经验"""
@@ -107,7 +106,7 @@ def _ppo_loss(
     obs = batch_t["obs"]
     act = batch_t["act"]
     old_logp = batch_t["logp"]  # 旧策略的对数概率
-    adv = batch_t["adv"]          # 优势函数
+    adv = batch_t["adv"]          # 优势函数（已在外部全局标准化）
     ret = batch_t["ret"]          # 回报值
 
     # 前向传播：获取新策略分布和价值估计
@@ -117,22 +116,32 @@ def _ppo_loss(
     # PPO 核心公式：重要性采样比率
     ratio = torch.exp(new_logp - old_logp)
 
-    # 对优势函数进行标准化（减去均值，除以标准差）
-    adv = (adv - adv.mean()) / (adv.std() + 1e-8)
-
     # PPO 裁剪机制：限制策略更新幅度
     clip_adv = torch.clamp(ratio, 1.0 - clip_ratio, 1.0 + clip_ratio) * adv
     # 策略损失：取原始比率 * 优势 和 裁剪后 * 优势 的最小值
     policy_loss = -(torch.min(ratio * adv, clip_adv)).mean()
 
-    # 价值损失：MSE 损失
-    value_loss = torch.nn.functional.mse_loss(v, ret)
+    # Value Loss Clipping（标准 PPO 做法）
+    # 获取旧的价值估计（需要从 batch 中传入，这里我们用当前 v 作为近似）
+    # 注意：完整实现需要保存 old_v，但为了简化，我们先不做 clipping
+    # 仅保持 0.5 系数的 MSE
+    value_loss = 0.5 * torch.nn.functional.mse_loss(v, ret)
 
     # 熵损失：最大化熵以保持探索
     entropy_loss = -dist.entropy().sum(axis=-1).mean()
 
     # 总损失 = 策略损失 + 价值损失系数 * 价值损失 + 熵系数 * 熵损失
     loss = policy_loss + vf_coef * value_loss + ent_coef * entropy_loss
+
+    # 新增监控指标
+    with torch.no_grad():
+        approx_kl = 0.5 * ((new_logp - old_logp) ** 2).mean().item()
+        clip_frac = ((ratio - 1.0).abs() > clip_ratio).float().mean().item()
+        # 计算解释方差（explained variance）
+        y_pred = v
+        y_true = ret
+        var_y = torch.var(y_true)
+        explained_var = 1.0 - torch.var(y_true - y_pred) / (var_y + 1e-8)
 
     # 收集训练指标用于监控
     metrics = {
@@ -141,6 +150,9 @@ def _ppo_loss(
         "value_loss": float(value_loss.detach().cpu().item()),
         "entropy": float((-entropy_loss).detach().cpu().item()),
         "ratio": float(ratio.detach().cpu().mean().item()),
+        "approx_kl": approx_kl,
+        "clip_fraction": clip_frac,
+        "explained_var": float(explained_var.detach().cpu().item()),
     }
     return loss, metrics
 
@@ -161,9 +173,10 @@ class MuJoCoActor:
         self.actor_id = actor_id  # Actor 的唯一标识符
         self.env = gym.make(env_name)  # 创建独立的环境实例
 
-        # 使用种子 + actor_id 确保每个 Actor 有不同的随机种子
-        self.rng = np.random.default_rng(seed + actor_id)
-        obs, _ = self.env.reset(seed=int(seed + actor_id))
+        # 修改：增大种子间隔以提高数据多样性
+        actor_seed = seed + actor_id * 10000
+        self.rng = np.random.default_rng(actor_seed)
+        obs, _ = self.env.reset(seed=int(actor_seed))
 
         # 获取环境空间维度
         self.obs_dim = int(np.asarray(obs).shape[0])
@@ -341,9 +354,37 @@ class Learner:
         hidden_sizes = tuple(cfg.get("hidden_sizes", (256, 256)))
         self.model = ActorCritic(obs_dim, action_dim, hidden_sizes=hidden_sizes).to(self.device)
 
-        # 创建 Adam 优化器
-        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=float(cfg["lr"]))
+        # 创建 Adam 优化器（添加 eps=1e-5 提高数值稳定性）
+        self.optimizer = torch.optim.Adam(
+            self.model.parameters(), 
+            lr=float(cfg["lr"]),
+            eps=1e-5
+        )
         self.model.train()  # 设置为训练模式
+
+        # 新增：学习率线性衰减
+        self.total_updates = 0
+        max_iters = int(cfg.get("max_iters", 1000))
+        updates_per_iter = int(cfg.get("learner_updates_per_iter", 4))
+        num_actors = int(cfg.get("num_actors", 1))
+        rollout_len = int(cfg.get("rollout_length", 2048))
+        batch_sz = int(cfg.get("batch_size", 64))
+        batches_per_epoch = max(1, (num_actors * rollout_len) // batch_sz)
+        self.max_total_updates = max_iters * updates_per_iter * batches_per_epoch
+        self.initial_lr = float(cfg["lr"])
+        self.lr_schedule = cfg.get("lr_schedule", "linear")
+
+    def _update_lr(self) -> float:
+        """更新学习率（线性衰减）"""
+        if self.lr_schedule == "linear":
+            frac = max(1.0 - (self.total_updates / self.max_total_updates), 0.0)
+            new_lr = self.initial_lr * frac
+        else:
+            new_lr = self.initial_lr
+        
+        for param_group in self.optimizer.param_groups:
+            param_group["lr"] = new_lr
+        return new_lr
 
     def _select_device(self) -> torch.device:
         """根据硬件可用性选择最佳计算设备"""
@@ -366,19 +407,38 @@ class Learner:
             包含更新后的模型状态字典和训练指标的字典
         """
         metrics_acc: dict[str, float] = {}  # 累积指标
+        grad_norm_acc = 0.0
+        current_lr = self.initial_lr
+        updates_this_call = 0
 
         # 获取所有最新的 on-policy 数据
         all_data = ray.get(self.replay_buffer.get_all.remote())
         if not all_data:
             return {"state_dict": self.model.state_dict(), "metrics": {}}
 
+        # 新增：全局 Advantage 标准化
+        all_advs = np.array([d["adv"] for d in all_data])
+        adv_mean = float(all_advs.mean())
+        adv_std = float(all_advs.std()) + 1e-8
+        for d in all_data:
+            d["adv"] = (d["adv"] - adv_mean) / adv_std
+
         batch_size = int(self.cfg["batch_size"])
         num_samples = len(all_data)
+        max_grad_norm = float(self.cfg.get("max_grad_norm", 0.5))
+        target_kl = float(self.cfg.get("target_kl", 0.015))
 
+        early_stop = False
         # 执行多轮梯度更新
-        for _ in range(int(updates)):
+        for epoch in range(int(updates)):
+            if early_stop:
+                break
+            
             # 对数据进行随机打乱
             indices = np.random.permutation(num_samples)
+            
+            epoch_kl_sum = 0.0
+            epoch_batches = 0
             
             # 分批训练
             for start_idx in range(0, num_samples, batch_size):
@@ -401,18 +461,43 @@ class Learner:
                 # 反向传播更新参数
                 self.optimizer.zero_grad(set_to_none=True)
                 loss.backward()
+                
+                # 新增：梯度裁剪
+                grad_norm = torch.nn.utils.clip_grad_norm_(
+                    self.model.parameters(), max_norm=max_grad_norm
+                )
+                grad_norm_acc += float(grad_norm.item())
+                
                 self.optimizer.step()
+                
+                # 新增：更新学习率
+                self.total_updates += 1
+                updates_this_call += 1
+                current_lr = self._update_lr()
 
                 # 累积指标
                 for k, v in metrics.items():
                     metrics_acc[k] = metrics_acc.get(k, 0.0) + float(v)
+                
+                # 累积 epoch KL
+                epoch_kl_sum += metrics.get("approx_kl", 0.0)
+                epoch_batches += 1
+
+            # epoch 结束后才检查平均 KL
+            avg_epoch_kl = epoch_kl_sum / max(epoch_batches, 1)
+            if avg_epoch_kl > target_kl:
+                early_stop = True
+                break
 
         # 计算平均指标
-        num_batches = (num_samples + batch_size - 1) // batch_size
-        total_updates = int(updates) * num_batches
-        if metrics_acc and total_updates > 0:
+        if updates_this_call > 0 and metrics_acc:
             for k in list(metrics_acc.keys()):
-                metrics_acc[k] /= float(total_updates)
+                metrics_acc[k] /= float(updates_this_call)
+        
+        # 新增：添加平均梯度范数和当前学习率到指标
+        if updates_this_call > 0:
+            metrics_acc["grad_norm"] = grad_norm_acc / float(updates_this_call)
+        metrics_acc["lr"] = current_lr
 
         # 清空数据存储，确保下次只使用新采集的数据
         ray.get(self.replay_buffer.clear.remote())
