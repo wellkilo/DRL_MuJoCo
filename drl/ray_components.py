@@ -127,11 +127,19 @@ def _ppo_loss(
     # 仅保持 0.5 系数的 MSE
     value_loss = 0.5 * torch.nn.functional.mse_loss(v, ret)
 
-    # 熵损失：最大化熵以保持探索
-    entropy_loss = -dist.entropy().sum(axis=-1).mean()
+    # 熵损失：最大化熵以保持探索（添加下限保护）
+    entropy = dist.entropy().sum(axis=-1).mean()
+    entropy_loss = -entropy
+
+    # 自适应 entropy 系数：entropy 越低，ent_coef 越大
+    min_entropy = 0.5
+    if entropy.item() < min_entropy:
+        adaptive_ent_coef = ent_coef * (1.0 + 3.0 * (min_entropy - entropy.item()) / min_entropy)
+    else:
+        adaptive_ent_coef = ent_coef
 
     # 总损失 = 策略损失 + 价值损失系数 * 价值损失 + 熵系数 * 熵损失
-    loss = policy_loss + vf_coef * value_loss + ent_coef * entropy_loss
+    loss = policy_loss + vf_coef * value_loss + adaptive_ent_coef * entropy_loss
 
     # 新增监控指标
     with torch.no_grad():
@@ -362,22 +370,17 @@ class Learner:
         )
         self.model.train()  # 设置为训练模式
 
-        # 新增：学习率线性衰减
+        # 新增：学习率线性衰减（基于迭代步数）
         self.total_updates = 0
-        max_iters = int(cfg.get("max_iters", 1000))
-        updates_per_iter = int(cfg.get("learner_updates_per_iter", 4))
-        num_actors = int(cfg.get("num_actors", 1))
-        rollout_len = int(cfg.get("rollout_length", 2048))
-        batch_sz = int(cfg.get("batch_size", 64))
-        batches_per_epoch = max(1, (num_actors * rollout_len) // batch_sz)
-        self.max_total_updates = max_iters * updates_per_iter * batches_per_epoch
+        self.current_iter = 0
+        self.max_iters = int(cfg.get("max_iters", 1000))
         self.initial_lr = float(cfg["lr"])
         self.lr_schedule = cfg.get("lr_schedule", "linear")
 
     def _update_lr(self) -> float:
-        """更新学习率（线性衰减）"""
+        """更新学习率（基于迭代步数的线性衰减）"""
         if self.lr_schedule == "linear":
-            frac = max(1.0 - (self.total_updates / self.max_total_updates), 0.0)
+            frac = max(1.0 - (self.current_iter / self.max_iters), 0.0)
             new_lr = self.initial_lr * frac
         else:
             new_lr = self.initial_lr
@@ -406,9 +409,12 @@ class Learner:
         Returns:
             包含更新后的模型状态字典和训练指标的字典
         """
+        # 每轮迭代开始时更新学习率和迭代计数
+        self.current_iter += 1
+        current_lr = self._update_lr()
+        
         metrics_acc: dict[str, float] = {}  # 累积指标
         grad_norm_acc = 0.0
-        current_lr = self.initial_lr
         updates_this_call = 0
 
         # 获取所有最新的 on-policy 数据
@@ -470,10 +476,9 @@ class Learner:
                 
                 self.optimizer.step()
                 
-                # 新增：更新学习率
+                # 新增：更新计数
                 self.total_updates += 1
                 updates_this_call += 1
-                current_lr = self._update_lr()
 
                 # 累积指标
                 for k, v in metrics.items():
