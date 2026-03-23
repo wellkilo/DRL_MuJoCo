@@ -7,7 +7,7 @@ gae_lambda: 0.95
 lr: 0.0003
 clip_ratio: 0.2
 vf_coef: 0.5
-ent_coef: 0.01
+ent_coef: 0.02
 rollout_length: 2048
 actor_update_interval: 1
 learner_updates_per_iter: 4
@@ -18,7 +18,7 @@ hidden_sizes: [64, 64]
 seed: 42
 use_cuda: true
 use_mps: true
-max_grad_norm: 0.5
+max_grad_norm: 1.0
 target_kl: 0.02
 lr_schedule: "linear"
 ray_address:

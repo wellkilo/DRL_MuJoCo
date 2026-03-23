@@ -9,6 +9,7 @@ import os
 import signal
 import sys
 import time
+from collections import deque
 from pathlib import Path
 from typing import Any
 
@@ -189,6 +190,7 @@ def main() -> None:
     total_steps = 0          # 总采样步数
     total_episodes = 0        # 总回合数
     total_return_sum = 0.0    # 累计回报总和
+    recent_returns = deque(maxlen=100)  # 滑动窗口追踪最近 100 个 episode 的回报
     best_avg_return = -float('inf')  # 最佳平均回报
     
     # 目标样本数量：所有 Actor 各采集一个 rollout_length 的数据
@@ -216,8 +218,15 @@ def main() -> None:
             # 累计统计信息
             traj_len = len(traj)
             total_steps += traj_len
-            total_episodes += int(stats.get("episodes", 0))
-            total_return_sum += float(stats.get("episode_return_sum", 0.0))
+            ep_count = int(stats.get("episodes", 0))
+            ep_return_sum = float(stats.get("episode_return_sum", 0.0))
+            total_episodes += ep_count
+            total_return_sum += ep_return_sum
+            
+            # 将本轮 episode 的平均回报加入滑动窗口
+            if ep_count > 0:
+                recent_returns.append(ep_return_sum / ep_count)
+                
             log_event("actor_sample", {"step": train_step, **stats, "traj_len": traj_len})
 
         # 阶段2：进行一次完整的 on-policy 学习更新
@@ -235,7 +244,7 @@ def main() -> None:
         # 记录和保存训练指标
         elapsed = time.time() - start_time
         sps = total_steps / elapsed if elapsed > 0 else 0.0
-        avg_return = total_return_sum / total_episodes if total_episodes > 0 else math.nan
+        avg_return = sum(recent_returns) / len(recent_returns) if recent_returns else math.nan
         log_event(
             "learner_update",
             {
