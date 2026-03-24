@@ -17,31 +17,27 @@ if "PYOPENGL_PLATFORM" in os.environ:
     del os.environ["PYOPENGL_PLATFORM"]
 
 import gymnasium as gym
-from gymnasium.wrappers import RecordVideo
 import numpy as np
 import torch
 import imageio
 
 from drl.config_loader import load_config
 from drl.models import ActorCritic
-from drl.ray_components import Learner
 
 
 def generate_video(
     config_path: str,
     output_path: str,
-    num_episodes: int = 1,
-    max_steps: int = 100,
+    target_duration: float = 15.0,
     fps: int = 30
 ) -> dict[str, Any]:
     """
-    生成训练结果的视频演示
+    生成训练结果的视频演示 - 固定时长版本
     
     Args:
         config_path: 配置文件路径
         output_path: 输出视频路径
-        num_episodes: 要录制的回合数
-        max_steps: 每回合最大步数
+        target_duration: 目标视频时长（秒）
         fps: 视频帧率
     
     Returns:
@@ -51,10 +47,6 @@ def generate_video(
     
     # 删除旧的视频文件
     output_path_obj = Path(output_path)
-    output_dir_path = output_path_obj.parent
-    video_prefix = output_path_obj.stem
-    
-    # 删除目标视频文件
     if output_path_obj.exists():
         try:
             output_path_obj.unlink()
@@ -62,13 +54,7 @@ def generate_video(
         except Exception as e:
             print(f"[Video Generator] Warning: Could not delete old video: {e}", flush=True)
     
-    # 删除 RecordVideo 生成的旧视频文件
-    for old_video in output_dir_path.glob(f"{video_prefix}-episode-*.mp4"):
-        try:
-            old_video.unlink()
-            print(f"[Video Generator] Deleted old RecordVideo: {old_video}", flush=True)
-        except Exception as e:
-            print(f"[Video Generator] Warning: Could not delete old RecordVideo: {e}", flush=True)
+    env = None
     try:
         # 先关闭可能存在的 Ray 实例，避免和 MuJoCo 环境冲突
         try:
@@ -86,21 +72,26 @@ def generate_video(
         # 确保输出目录存在
         output_dir_path = Path(output_path).parent
         output_dir_path.mkdir(parents=True, exist_ok=True)
-        # 使用 RecordVideo 包装器
-        video_prefix = Path(output_path).stem
-        env = gym.make(cfg.env_name, render_mode="rgb_array")
-        env = RecordVideo(
-            env,
-            video_folder=str(output_dir_path),
-            name_prefix=video_prefix,
-            episode_trigger=lambda x: True,  # 录制所有回合
-            disable_logger=False,
-            fps=fps
+        # 创建环境 - 设置非常大的 max_episode_steps 防止环境提前终止
+        env = gym.make(
+            cfg.env_name, 
+            render_mode="rgb_array", 
+            camera_name="track",
+            max_episode_steps=10000  # 足够大的步数限制
         )
         obs_dim = int(np.asarray(env.observation_space.shape[0]))
         action_dim = int(np.asarray(env.action_space.shape[0]))
         action_low = np.asarray(env.action_space.low, dtype=np.float32)
         action_high = np.asarray(env.action_space.high, dtype=np.float32)
+        
+        # 先获取一帧以确定渲染分辨率，用于黑帧生成
+        frame_shape = None
+        try:
+            test_frame = env.render()
+            if test_frame is not None:
+                frame_shape = test_frame.shape
+        except Exception:
+            pass
         
         # 创建模型
         print(f"[Video Generator] Creating model...", flush=True)
@@ -140,88 +131,80 @@ def generate_video(
         
         model.eval()
         
-        # 录制视频 - RecordVideo 会自动处理
-        for episode in range(num_episodes):
-            print(f"[Video Generator] Recording episode {episode + 1}/{num_episodes}", flush=True)
-            try:
-                obs, _ = env.reset(seed=cfg.seed + episode)
-                print(f"[Video Generator]   Environment reset done", flush=True)
-            except Exception as e:
-                print(f"[Video Generator]   Error resetting environment: {e}", flush=True)
-                import traceback
-                traceback.print_exc()
-                continue
-                
-            for step in range(max_steps):
-                if step % 10 == 0:
-                    print(f"[Video Generator]   Step {step}/{max_steps}", flush=True)
-                
-                try:
-                    # 选择动作
-                    with torch.no_grad():
-                        obs_tensor = torch.tensor(obs, dtype=torch.float32).unsqueeze(0)
-                        dist, _ = model.get_dist_and_value(obs_tensor)
-                        action = dist.mean.squeeze(0).numpy()
-                        # 裁剪动作到合法范围
-                        action = np.clip(action, action_low, action_high)
-                except Exception as e:
-                    print(f"[Video Generator]   Step {step}: Error selecting action: {e}", flush=True)
-                    # 使用零动作作为备用
-                    action = np.zeros_like(action_low)
-                
-                try:
-                    # 执行环境步进 - RecordVideo 会自动渲染和录制
-                    obs, reward, terminated, truncated, _ = env.step(action)
-                except Exception as e:
-                    print(f"[Video Generator]   Step {step}: Error stepping environment: {e}", flush=True)
-                    break
-                
-                # 即使环境终止，我们也继续运行，直到达到 max_steps
-                if terminated or truncated:
-                    print(f"[Video Generator]   Episode terminated at step {step}, continuing to run to max_steps...", flush=True)
-                    # 继续运行但不重置环境，确保达到完整的步数
-                    # 保持 terminated 状态但继续执行
+        # 固定帧数录制
+        total_frames = int(target_duration * fps)
+        print(f"[Video Generator] Recording {total_frames} frames for {target_duration}s video at {fps}fps...", flush=True)
+        
+        frames = []
+        obs, _ = env.reset(seed=cfg.seed)
+        
+        for frame_idx in range(total_frames):
+            if frame_idx % 30 == 0:
+                print(f"[Video Generator]   Frame {frame_idx}/{total_frames} ({frame_idx/total_frames*100:.1f}%)", flush=True)
             
-            print(f"[Video Generator] Episode {episode + 1} completed", flush=True)
-        
-        env.close()
-        
-        # 查找 RecordVideo 生成的视频文件
-        print(f"[Video Generator] Looking for generated video...", flush=True)
-        generated_video_path = None
-        output_dir_path = Path(output_path).parent
-        video_prefix = Path(output_path).stem
-        # 查找最新生成的视频文件
-        video_files = sorted(
-            output_dir_path.glob(f"{video_prefix}-episode-*.mp4"),
-            key=lambda x: x.stat().st_mtime,
-            reverse=True
-        )
-        if video_files:
-            generated_video_path = video_files[0]
-            print(f"[Video Generator] Found generated video: {generated_video_path}", flush=True)
-            # 重命名文件到目标路径
             try:
-                generated_video_path.rename(output_path)
-                print(f"[Video Generator] Video renamed to: {output_path}", flush=True)
-                return {
-                    "success": True,
-                    "output_path": output_path,
-                    "num_episodes": num_episodes
-                }
-            except Exception as rename_error:
-                print(f"[Video Generator] Error renaming video: {rename_error}", flush=True)
-                import traceback
-                traceback.print_exc()
-                return {
-                    "success": False,
-                    "error": f"Failed to rename video: {str(rename_error)}"
-                }
-        else:
-            print(f"[Video Generator] No video generated by RecordVideo", flush=True)
+                # 选择动作
+                with torch.no_grad():
+                    obs_tensor = torch.tensor(obs, dtype=torch.float32).unsqueeze(0)
+                    dist, _ = model.get_dist_and_value(obs_tensor)
+                    action = dist.mean.squeeze(0).numpy()
+                    # 裁剪动作到合法范围
+                    action = np.clip(action, action_low, action_high)
+            except Exception as e:
+                print(f"[Video Generator]   Frame {frame_idx}: Error selecting action: {e}", flush=True)
+                # 使用零动作作为备用
+                action = np.zeros_like(action_low)
+            
+            try:
+                # 执行环境步进 - 完全忽略终止标志
+                next_obs, reward, _, _, _ = env.step(action)
+                # 渲染并保存帧
+                frame = env.render()
+                frames.append(frame)
+                # 更新 observation
+                obs = next_obs
+            except Exception as e:
+                print(f"[Video Generator]   Frame {frame_idx}: Error stepping environment: {e}", flush=True)
+                # 出错时重复上一帧
+                if frames:
+                    frames.append(frames[-1])
+                else:
+                    # 如果没有帧，创建黑帧 - 使用动态分辨率
+                    if frame_shape:
+                        frames.append(np.zeros(frame_shape, dtype=np.uint8))
+                    else:
+                        # 回退到默认分辨率
+                        frames.append(np.zeros((480, 640, 3), dtype=np.uint8))
+                continue
+        
+        print(f"[Video Generator] Frame collection complete, writing video...", flush=True)
+        
+        # 使用 imageio 写入视频
+        try:
+            # 确保帧数正确
+            if len(frames) > total_frames:
+                frames = frames[:total_frames]
+            elif len(frames) < total_frames:
+                # 填充最后一帧
+                while len(frames) < total_frames:
+                    frames.append(frames[-1])
+            
+            imageio.mimwrite(output_path, frames, fps=fps, quality=8)
+            print(f"[Video Generator] Video saved to: {output_path}", flush=True)
+            return {
+                "success": True,
+                "output_path": output_path,
+                "duration": target_duration,
+                "fps": fps,
+                "num_frames": total_frames
+            }
+        except Exception as write_error:
+            print(f"[Video Generator] Error writing video: {write_error}", flush=True)
+            import traceback
+            traceback.print_exc()
             return {
                 "success": False,
-                "error": "No video generated by RecordVideo"
+                "error": f"Failed to write video: {str(write_error)}"
             }
             
     except Exception as e:
@@ -232,21 +215,27 @@ def generate_video(
             "success": False,
             "error": str(e)
         }
+    finally:
+        # 确保环境总是被关闭
+        if env is not None:
+            try:
+                env.close()
+                print(f"[Video Generator] Environment closed", flush=True)
+            except Exception as close_error:
+                print(f"[Video Generator] Warning: Could not close environment: {close_error}", flush=True)
 
 
 def generate_comparison_videos(
     output_dir: str,
-    num_episodes: int = 1,
-    max_steps: int = 100,
+    target_duration: float = 15.0,
     fps: int = 30
 ) -> dict[str, Any]:
     """
-    生成分布式和单机训练的对比视频
+    生成分布式和单机训练的对比视频 - 固定时长版本
     
     Args:
         output_dir: 输出目录
-        num_episodes: 要录制的回合数
-        max_steps: 每回合最大步数
+        target_duration: 目标视频时长（秒）
         fps: 视频帧率
     
     Returns:
@@ -263,8 +252,7 @@ def generate_comparison_videos(
     results["distributed"] = generate_video(
         config_path=config_path_distributed,
         output_path=output_path_distributed,
-        num_episodes=num_episodes,
-        max_steps=max_steps,
+        target_duration=target_duration,
         fps=fps
     )
     
@@ -275,8 +263,7 @@ def generate_comparison_videos(
     results["single"] = generate_video(
         config_path=config_path_single,
         output_path=output_path_single,
-        num_episodes=num_episodes,
-        max_steps=max_steps,
+        target_duration=target_duration,
         fps=fps
     )
     
