@@ -31,7 +31,7 @@
 - Learner 进行策略更新
 - ParameterServer 分发最新参数
 - 支持 CUDA / MPS / CPU 自动选择
-- **TypeScript 前端**：React 18 + TypeScript + Zustand，类型安全，代码简洁
+- **TypeScript 前端**：React 18 + TypeScript + Zustand + SCSS，类型安全，代码简洁
 - **Rust 高性能回放缓冲区**：SoA 内存布局 + 并行 GAE 计算
 - **Web UI 可视化界面**：实时监控训练过程，一键启动/停止，在线绘图
 
@@ -51,6 +51,9 @@
 - web/：Web UI 目录
   - server.py：FastAPI 后端服务
   - src/：TypeScript 前端源码
+    - styles/：SCSS 样式文件
+      - _variables.scss：SCSS 变量定义
+      - global.scss：全局样式
   - dist/：构建输出目录
 - rust_buffer/：Rust 高性能回放缓冲区
   - src/：Rust 源码
@@ -148,6 +151,7 @@ bash scripts/start.sh
 
 - **完整的 TypeScript 类型安全**：所有数据结构都有类型定义
 - **React 18 + Zustand**：简洁的状态管理
+- **SCSS 样式系统**：变量管理、嵌套选择器、代码复用
 - **通用图表组件**：一个组件替代 12 个手动创建的图表，减少代码冗余 70%
 - **4 个核心指标展示**：训练速度、平均回报、损失、Buffer 大小
 - **WebSocket 实时数据推送**：自动重连机制
@@ -188,6 +192,7 @@ maturin develop --release
 - TypeScript
 - React 18
 - Zustand（状态管理）
+- SCSS（样式系统）
 - Chart.js（数据可视化）
 - Vite（构建工具）
 
