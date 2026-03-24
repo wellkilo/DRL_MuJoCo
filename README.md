@@ -1,6 +1,6 @@
 # DRL MuJoCo 分布式训练原型
 
-本项目实现基于 Ray 的分布式 Actor-Learner 架构，面向 MuJoCo 环境进行并行采样与学习。
+本项目实现基于 Ray 的分布式 Actor-Learner 架构，面向 MuJoCo 环境进行并行采样与学习。项目包含 TypeScript 前端重写和 Rust 高性能回放缓冲区优化。
 
 ## 结果视图体系
 
@@ -31,6 +31,8 @@
 - Learner 进行策略更新
 - ParameterServer 分发最新参数
 - 支持 CUDA / MPS / CPU 自动选择
+- **TypeScript 前端**：React 18 + TypeScript + Zustand，类型安全，代码简洁
+- **Rust 高性能回放缓冲区**：SoA 内存布局 + 并行 GAE 计算
 - **Web UI 可视化界面**：实时监控训练过程，一键启动/停止，在线绘图
 
 ## 目录结构
@@ -48,8 +50,15 @@
   - start.sh：训练与绘图启动脚本
 - web/：Web UI 目录
   - server.py：FastAPI 后端服务
-  - templates/：HTML 模板
-  - static/：静态资源
+  - src/：TypeScript 前端源码
+  - dist/：构建输出目录
+- rust_buffer/：Rust 高性能回放缓冲区
+  - src/：Rust 源码
+    - buffer.rs：回放缓冲区实现（SoA 布局）
+    - gae.rs：并行 GAE 计算
+    - lib.rs：PyO3 Python 绑定
+  - Cargo.toml：Rust 项目配置
+  - pyproject.toml：Maturin 配置
 
 ## 快速开始
 
@@ -63,6 +72,8 @@ bash scripts/build.sh
 - 检查 conda 是否可用
 - 创建/激活 `drl-arm` 环境
 - 安装所有 Python 依赖
+- 可选：构建 TypeScript 前端
+- 可选：构建 Rust 回放缓冲区
 
 ### 2. 启动训练或绘图
 
@@ -75,7 +86,8 @@ bash scripts/start.sh
 2. 单机训练（1 个 Actor）
 3. 绘制训练曲线
 4. 绘制对比曲线
-5. 启动 Web UI 可视化
+5. 启动 Web UI（FastAPI 后端）
+6. 启动 TypeScript Dev Server + Web UI（推荐）
 
 ## 配置说明
 
@@ -103,11 +115,82 @@ bash scripts/start.sh
 
 ## Web UI 可视化
 
-启动 Web UI 服务器（通过 `bash scripts/start.sh` 选择选项 5），在浏览器中打开：http://127.0.0.1:8000
+### 开发模式（推荐）
+
+```bash
+bash scripts/start.sh
+# 选择选项 6 - Launch TypeScript Dev Server + Web UI
+```
+
+这会自动：
+1. 启动 FastAPI 后端（http://127.0.0.1:8000）
+2. 启动 Vite 开发服务器（http://localhost:5173）
+3. Vite 自动代理 /api 和 /ws 请求到 FastAPI 后端
+
+### 生产模式
+
+```bash
+cd web
+npm run build
+bash scripts/start.sh
+# 选择选项 5 - Launch Web UI (FastAPI backend)
+```
 
 ### Web UI 功能
+
 - **开始/停止训练**：一键控制训练进程
 - **实时监控**：通过 WebSocket 实时更新训练指标
 - **在线绘图**：实时显示训练速度、平均回报、损失、回放池大小曲线
-- **刷新数据**：手动刷新历史训练数据
+- **性能对比**：分布式 vs 单机训练指标对比
 - **一键生成视频**：生成分布式和单机训练结果的视频演示，支持独立播放和控制
+
+## TypeScript 前端特性
+
+- **完整的 TypeScript 类型安全**：所有数据结构都有类型定义
+- **React 18 + Zustand**：简洁的状态管理
+- **通用图表组件**：一个组件替代 12 个手动创建的图表，减少代码冗余 70%
+- **4 个核心指标展示**：训练速度、平均回报、损失、Buffer 大小
+- **WebSocket 实时数据推送**：自动重连机制
+- **响应式设计**：适配不同屏幕尺寸
+
+## Rust 回放缓冲区特性
+
+- **Structure of Arrays (SoA) 内存布局**：连续内存，更好的缓存局部性
+- **并行 GAE 计算**：使用 Rayon 多线程并行计算优势函数
+- **PyO3 Python 绑定**：无缝集成到现有 Python 代码
+- **目标性能提升**：10-50x 内存操作速度提升
+
+### 构建 Rust 回放缓冲区
+
+```bash
+bash scripts/build.sh
+# 选择构建 Rust Buffer
+```
+
+或手动构建：
+
+```bash
+cd rust_buffer
+pip install maturin
+maturin develop --release
+```
+
+## 技术栈
+
+### 后端
+- Python 3.9+
+- FastAPI（Web 服务）
+- Ray（分布式计算）
+- PyTorch（深度学习）
+- MuJoCo（物理仿真）
+
+### 前端
+- TypeScript
+- React 18
+- Zustand（状态管理）
+- Chart.js（数据可视化）
+- Vite（构建工具）
+
+### 性能优化
+- Rust + ndarray + Rayon
+- PyO3（Python 绑定）

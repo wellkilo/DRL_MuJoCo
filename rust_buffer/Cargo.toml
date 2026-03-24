@@ -1,0 +1,15 @@
+[package]
+name = "rust_buffer"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "rust_buffer"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.20", features = ["extension-module", "numpy"] }
+numpy = "0.20"
+rayon = "1.8"
+ndarray = "0.15"
+ndarray-npy = "0.8"
