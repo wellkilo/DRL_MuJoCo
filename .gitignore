@@ -15,3 +15,17 @@ ray_results/
 *.ckpt
 *.onnx
 temp_*.py
+
+# TypeScript / Node.js
+web/node_modules/
+web/dist/
+web/.vite/
+web/tsconfig.tsbuildinfo
+
+# Rust
+rust_buffer/target/
+rust_buffer/*.so
+rust_buffer/*.dylib
+rust_buffer/*.dll
+rust_buffer/Cargo.lock
+

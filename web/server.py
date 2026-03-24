@@ -31,21 +31,11 @@ REPO_ROOT = Path(__file__).parent.parent
 OUTPUT_DIR = REPO_ROOT / "output"
 OUTPUT_DIR.mkdir(exist_ok=True)  # 确保输出目录存在
 
-# 静态资源和模板配置
-app.mount("/static", StaticFiles(directory=REPO_ROOT / "web/static"), name="static")
-templates = Jinja2Templates(directory=REPO_ROOT / "web/templates")
-
 # 全局变量
 training_task: asyncio.subprocess.Process | None = None  # 当前训练进程
 clients: list[WebSocket] = []  # WebSocket 客户端列表
 video_generation_process: asyncio.subprocess.Process | None = None  # 视频生成进程
 video_generation_status: dict[str, Any] = {"status": "idle"}  # 视频生成状态
-
-
-@app.get("/")
-async def get_index() -> FileResponse:
-    """返回主页"""
-    return FileResponse(REPO_ROOT / "web/templates/index.html")
 
 
 def load_metrics_file(metrics_path: Path) -> list[dict[str, Any]]:
@@ -75,7 +65,16 @@ def load_metrics_file(metrics_path: Path) -> list[dict[str, Any]]:
     return metrics
 
 
-# ==================== API 端点 ====================
+# ==================== API 端点 - 必须在静态文件挂载之前定义 ====================
+
+@app.get("/")
+async def get_index() -> FileResponse:
+    """返回主页"""
+    WEB_DIST = REPO_ROOT / "web" / "dist"
+    if (WEB_DIST / "index.html").exists():
+        return FileResponse(WEB_DIST / "index.html")
+    return FileResponse(REPO_ROOT / "web" / "index.html")
+
 
 @app.get("/api/metrics/distributed")
 async def get_metrics_distributed() -> list[dict[str, Any]]:
@@ -181,67 +180,7 @@ async def stop_training() -> dict[str, str]:
     return {"status": "stopped"}
 
 
-# ==================== 监控任务 ====================
-
-async def monitor_training_output() -> None:
-    """监控训练进程的输出并打印到控制台"""
-    if not training_task or not training_task.stdout:
-        return
-    print("[Training Output] Starting to monitor training output...", flush=True)
-    try:
-        while True:
-            line = await training_task.stdout.readline()
-            if not line:
-                break
-            print(f"[Training Output] {line.decode().rstrip()}", flush=True)
-    except Exception as e:
-        print(f"[Training Output] Error: {e}", flush=True)
-    finally:
-        print("[Training Output] Training output monitoring ended.", flush=True)
-
-
-async def monitor_training() -> None:
-    """
-    监控训练进程并实时推送指标
-    定期读取训练指标文件，通过 WebSocket 推送给所有连接的客户端
-    """
-    if not training_task:
-        return
-
-    print("[Monitor] Starting monitoring...", flush=True)
-    # 当训练进程运行时持续监控
-    while training_task.returncode is None:
-        # 获取分布式和单机训练的最新指标
-        dist_metrics = load_metrics_file(OUTPUT_DIR / "metrics.csv")
-        single_metrics = load_metrics_file(OUTPUT_DIR / "metrics_single.csv")
-        
-        print(f"[Monitor] Got {len(dist_metrics)} dist metrics, {len(single_metrics)} single metrics, {len(clients)} clients", flush=True)
-
-        # 向所有连接的客户端推送数据
-        # 创建副本遍历，避免在遍历过程中修改列表
-        for client in clients.copy():
-            try:
-                await client.send_text(json.dumps({
-                    "type": "metrics",
-                    "distributed": dist_metrics,
-                    "single": single_metrics
-                }))
-                print(f"[Monitor] Sent data to client", flush=True)
-            except Exception as e:
-                print(f"[Monitor] Failed to send to client: {e}", flush=True)
-                # 发送失败，从客户端列表中移除
-                if client in clients:
-                    clients.remove(client)
-                print(f"[Monitor] Removed disconnected client. Total clients: {len(clients)}", flush=True)
-
-        # 每秒更新一次
-        await asyncio.sleep(1.0)
-    
-    print("[Monitor] Training stopped, monitoring ended.", flush=True)
-
-
 # ==================== 视频生成 API ====================
-
 
 def _create_video_script() -> Path:
     """创建临时视频生成脚本"""
@@ -388,6 +327,75 @@ async def get_single_video() -> Any:
     if video_path.exists():
         return FileResponse(video_path, media_type="video/mp4")
     return {"error": "Video not found"}
+
+
+# ==================== 监控任务 ====================
+
+async def monitor_training_output() -> None:
+    """监控训练进程的输出并打印到控制台"""
+    if not training_task or not training_task.stdout:
+        return
+    print("[Training Output] Starting to monitor training output...", flush=True)
+    try:
+        while True:
+            line = await training_task.stdout.readline()
+            if not line:
+                break
+            print(f"[Training Output] {line.decode().rstrip()}", flush=True)
+    except Exception as e:
+        print(f"[Training Output] Error: {e}", flush=True)
+    finally:
+        print("[Training Output] Training output monitoring ended.", flush=True)
+
+
+async def monitor_training() -> None:
+    """
+    监控训练进程并实时推送指标
+    定期读取训练指标文件，通过 WebSocket 推送给所有连接的客户端
+    """
+    if not training_task:
+        return
+
+    print("[Monitor] Starting monitoring...", flush=True)
+    # 当训练进程运行时持续监控
+    while training_task.returncode is None:
+        # 获取分布式和单机训练的最新指标
+        dist_metrics = load_metrics_file(OUTPUT_DIR / "metrics.csv")
+        single_metrics = load_metrics_file(OUTPUT_DIR / "metrics_single.csv")
+        
+        print(f"[Monitor] Got {len(dist_metrics)} dist metrics, {len(single_metrics)} single metrics, {len(clients)} clients", flush=True)
+
+        # 向所有连接的客户端推送数据
+        # 创建副本遍历，避免在遍历过程中修改列表
+        for client in clients.copy():
+            try:
+                await client.send_text(json.dumps({
+                    "type": "metrics",
+                    "distributed": dist_metrics,
+                    "single": single_metrics
+                }))
+                print(f"[Monitor] Sent data to client", flush=True)
+            except Exception as e:
+                print(f"[Monitor] Failed to send to client: {e}", flush=True)
+                # 发送失败，从客户端列表中移除
+                if client in clients:
+                    clients.remove(client)
+                print(f"[Monitor] Removed disconnected client. Total clients: {len(clients)}", flush=True)
+
+        # 每秒更新一次
+        await asyncio.sleep(1.0)
+    
+    print("[Monitor] Training stopped, monitoring ended.", flush=True)
+
+
+# ==================== 静态资源配置 - 必须在 API 路由之后挂载 ====================
+
+app.mount("/output", StaticFiles(directory=OUTPUT_DIR), name="output")
+
+# 为 TypeScript 前端添加静态资源服务（如果已构建）
+WEB_DIST = REPO_ROOT / "web" / "dist"
+if WEB_DIST.exists():
+    app.mount("/assets", StaticFiles(directory=WEB_DIST / "assets"), name="ts_assets")
 
 
 if __name__ == "__main__":

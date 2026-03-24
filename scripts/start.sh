@@ -41,7 +41,8 @@ echo "1) Run distributed training (8 actors)"
 echo "2) Run single-agent training (1 actor)"
 echo "3) Plot training curves"
 echo "4) Plot comparison curves"
-echo "5) Launch Web UI (browser-based visualization)"
+echo "5) Launch Web UI (FastAPI backend)"
+echo "6) Launch TypeScript Dev Server + Web UI"
 read -p "Enter choice [1]: " choice
 
 choice=${choice:-1}
@@ -74,6 +75,41 @@ case $choice in
         echo "Launching Web UI..."
         echo "Open your browser and go to: http://127.0.0.1:8000"
         python "$REPO_ROOT/web/server.py"
+        ;;
+    6)
+        echo ""
+        if ! command -v npm &> /dev/null; then
+            echo "ERROR: npm not found."
+            echo "Install Node.js from https://nodejs.org/"
+            exit 1
+        fi
+        cd "$REPO_ROOT/web"
+        if [ ! -d "node_modules" ]; then
+            echo "Installing npm dependencies..."
+            npm install
+        fi
+        echo "Launching TypeScript Dev Server + Web UI..."
+        echo "Open your browser and go to: http://localhost:5173"
+        echo "Vite will proxy /api and /ws to FastAPI backend at http://127.0.0.1:8000"
+        echo "Starting FastAPI backend in background..."
+        cd "$REPO_ROOT"
+        python "$REPO_ROOT/web/server.py" > /tmp/fastapi.log 2>&1 &
+        FASTAPI_PID=$!
+        echo "Waiting for FastAPI backend to start..."
+        for i in {1..10}; do
+            if curl -s "http://127.0.0.1:8000/" > /dev/null 2>&1; then
+                echo "FastAPI backend is ready!"
+                break
+            fi
+            echo "  Waiting... ($i/10)"
+            sleep 1
+        done
+        cd "$REPO_ROOT/web"
+        echo "Starting Vite dev server..."
+        npm run dev
+        echo "Stopping FastAPI backend..."
+        kill $FASTAPI_PID 2>/dev/null || true
+        cd "$REPO_ROOT"
         ;;
     *)
         echo "ERROR: Invalid choice."
