@@ -1,0 +1,241 @@
+@use './variables' as *;
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: $primary-gradient;
+  min-height: 100vh;
+  padding: $spacing-xl;
+}
+
+.container {
+  max-width: 1600px;
+  margin: 0 auto;
+  background: $bg-white;
+  border-radius: $radius-lg;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+  overflow: hidden;
+}
+
+.header {
+  background: $primary-gradient;
+  color: $bg-white;
+  padding: $spacing-xl;
+  text-align: center;
+
+  h1 {
+    font-size: $font-size-2xl;
+    margin-bottom: $spacing-xs;
+  }
+
+  p {
+    opacity: 0.9;
+  }
+}
+
+.controls {
+  display: flex;
+  gap: $spacing-md;
+  justify-content: center;
+  padding: $spacing-lg;
+  background: $bg-light;
+  border-bottom: 1px solid $border-color;
+  flex-wrap: wrap;
+}
+
+.btn {
+  padding: $spacing-sm 2rem;
+  border: none;
+  border-radius: $radius-sm;
+  font-size: $font-size-sm;
+  font-weight: 600;
+  cursor: pointer;
+  transition: $transition-fast;
+  box-shadow: $shadow-md;
+
+  &:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    transform: none !important;
+  }
+}
+
+.btn-primary {
+  background: $primary-gradient;
+  color: $bg-white;
+
+  &:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+  }
+}
+
+.btn-success {
+  background: $success-gradient;
+  color: $bg-white;
+
+  &:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(40, 167, 69, 0.4);
+  }
+}
+
+.btn-danger {
+  background: $danger-color;
+  color: $bg-white;
+
+  &:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(220, 53, 69, 0.4);
+  }
+}
+
+.status {
+  padding: $spacing-md $spacing-xl;
+  text-align: center;
+  font-weight: 600;
+  font-size: $font-size-md;
+  color: $text-primary;
+  background: #fff3cd;
+  border-bottom: 1px solid #ffc107;
+
+  &.running {
+    background: #d4edda;
+    color: #155724;
+    border-color: $success-color;
+  }
+}
+
+.tabs {
+  display: flex;
+  background: $bg-light;
+  border-bottom: 1px solid $border-color;
+}
+
+.tab {
+  padding: $spacing-md $spacing-xl;
+  cursor: pointer;
+  border: none;
+  background: none;
+  font-size: $font-size-sm;
+  font-weight: 600;
+  color: $text-secondary;
+  transition: $transition-fast;
+  border-bottom: 3px solid transparent;
+
+  &:hover {
+    color: $primary-color;
+  }
+
+  &.active {
+    color: $primary-color;
+    border-bottom-color: $primary-color;
+    background: $bg-white;
+  }
+}
+
+.tab-content {
+  padding: $spacing-xl;
+}
+
+.charts-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(500px, 1fr));
+  gap: $spacing-lg;
+}
+
+.chart-card {
+  background: $bg-white;
+  border-radius: $radius-md;
+  padding: $spacing-lg;
+  box-shadow: $shadow-sm;
+  border: 1px solid $border-color;
+
+  h3 {
+    margin-bottom: $spacing-md;
+    color: $text-primary;
+    font-size: $font-size-md;
+  }
+}
+
+.chart-wrapper {
+  height: 300px;
+}
+
+.video-section {
+  padding: $spacing-xl;
+  background: $bg-white;
+  border-top: 1px solid $border-color;
+
+  h2 {
+    text-align: center;
+    color: $text-primary;
+    margin-bottom: $spacing-lg;
+    font-size: $font-size-xl;
+  }
+}
+
+.video-status {
+  text-align: center;
+  padding: $spacing-sm;
+  margin-bottom: $spacing-lg;
+  font-weight: 600;
+  color: $text-primary;
+  background: $bg-light;
+  border-radius: $radius-sm;
+
+  &.generating {
+    background: #fff3cd;
+    color: #856404;
+  }
+
+  &.completed {
+    background: #d4edda;
+    color: #155724;
+  }
+
+  &.error {
+    background: #f8d7da;
+    color: #721c24;
+  }
+}
+
+.video-container {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+  gap: $spacing-xl;
+  margin-bottom: $spacing-lg;
+}
+
+.video-card {
+  background: $bg-light;
+  border-radius: $radius-md;
+  padding: $spacing-lg;
+  box-shadow: $shadow-sm;
+  border: 1px solid $border-color;
+
+  h3 {
+    text-align: center;
+    margin-bottom: $spacing-md;
+    color: $text-primary;
+    font-size: $font-size-lg;
+  }
+}
+
+.video-player {
+  width: 100%;
+  border-radius: $radius-sm;
+  background: #000;
+}
+
+.video-controls {
+  display: flex;
+  gap: $spacing-md;
+  justify-content: center;
+  flex-wrap: wrap;
+}

@@ -12,7 +12,7 @@ import { DistributedTab } from './components/Tabs/DistributedTab';
 import { SingleTab } from './components/Tabs/SingleTab';
 import { ComparisonTab } from './components/Tabs/ComparisonTab';
 import { VideoSection } from './components/Video/VideoSection';
-import './styles/global.css';
+import './styles/global.scss';
 import favIcon from './assets/favicon.svg';
 
 function App() {
