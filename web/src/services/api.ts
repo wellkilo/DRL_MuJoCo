@@ -1,4 +1,4 @@
-import { TrainingMetrics, VideoStatus } from '../types/metrics';
+import { TrainingMetrics, VideoStatus } from '@/types/metrics';
 
 const API_BASE = '/api';
 
@@ -7,7 +7,7 @@ export async function getDistributedMetrics(): Promise<TrainingMetrics[]> {
     const resp = await fetch(`${API_BASE}/metrics/distributed`);
     if (!resp.ok) return [];
     return await resp.json();
-  } catch (e) {
+  } catch {
     return [];
   }
 }
@@ -17,7 +17,7 @@ export async function getSingleMetrics(): Promise<TrainingMetrics[]> {
     const resp = await fetch(`${API_BASE}/metrics/single`);
     if (!resp.ok) return [];
     return await resp.json();
-  } catch (e) {
+  } catch {
     return [];
   }
 }

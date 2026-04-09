@@ -42,7 +42,7 @@ echo "2) Run single-agent training (1 actor)"
 echo "3) Plot training curves"
 echo "4) Plot comparison curves"
 echo "5) Launch Web UI (FastAPI backend)"
-echo "6) Launch TypeScript Dev Server + Web UI"
+echo "6) Launch Next.js Dev Server + Web UI (推荐)"
 read -p "Enter choice [1]: " choice
 
 choice=${choice:-1}
@@ -88,9 +88,9 @@ case $choice in
             echo "Installing npm dependencies..."
             npm install
         fi
-        echo "Launching TypeScript Dev Server + Web UI..."
-        echo "Open your browser and go to: http://localhost:5173"
-        echo "Vite will proxy /api and /ws to FastAPI backend at http://127.0.0.1:8000"
+        echo "Launching Next.js Dev Server + Web UI..."
+        echo "Open your browser and go to: http://localhost:3000"
+        echo "Next.js will proxy /api and /ws to FastAPI backend at http://127.0.0.1:8000"
         echo "Starting FastAPI backend in background..."
         cd "$REPO_ROOT"
         python "$REPO_ROOT/web/server.py" > /tmp/fastapi.log 2>&1 &
@@ -105,7 +105,7 @@ case $choice in
             sleep 1
         done
         cd "$REPO_ROOT/web"
-        echo "Starting Vite dev server..."
+        echo "Starting Next.js dev server..."
         npm run dev
         echo "Stopping FastAPI backend..."
         kill $FASTAPI_PID 2>/dev/null || true

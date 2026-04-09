@@ -1,4 +1,4 @@
-import { TrainingMetrics, WebSocketMessage } from '../types/metrics';
+import { TrainingMetrics, WebSocketMessage } from '@/types/metrics';
 
 type MetricsCallback = (distributed: TrainingMetrics[], single: TrainingMetrics[]) => void;
 

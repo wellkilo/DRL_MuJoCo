@@ -1,6 +1,6 @@
 # DRL MuJoCo 分布式训练原型
 
-本项目实现基于 Ray 的分布式 Actor-Learner 架构，面向 MuJoCo 环境进行并行采样与学习。项目包含 TypeScript 前端重写和 Rust 高性能回放缓冲区优化。
+本项目实现基于 Ray 的分布式 Actor-Learner 架构，面向 MuJoCo 环境进行并行采样与学习。项目包含 Next.js 前端和 Rust 高性能回放缓冲区优化。
 
 ## 结果视图体系
 
@@ -31,7 +31,7 @@
 - Learner 进行策略更新
 - ParameterServer 分发最新参数
 - 支持 CUDA / MPS / CPU 自动选择
-- **TypeScript 前端**：React 18 + TypeScript + Zustand + SCSS，类型安全，代码简洁
+- **Next.js 前端**：React 19 + Next.js 15 + TypeScript + Zustand + Tailwind CSS 4，类型安全，现代 UI
 - **Rust 高性能回放缓冲区**：SoA 内存布局 + 并行 GAE 计算
 - **Web UI 可视化界面**：实时监控训练过程，一键启动/停止，在线绘图
 
@@ -50,11 +50,21 @@
   - start.sh：训练与绘图启动脚本
 - web/：Web UI 目录
   - server.py：FastAPI 后端服务
-  - src/：TypeScript 前端源码
-    - styles/：SCSS 样式文件
-      - _variables.scss：SCSS 变量定义
-      - global.scss：全局样式
-  - dist/：构建输出目录
+  - src/：Next.js 前端源码
+    - app/：Next.js App Router 页面
+      - layout.tsx：根布局
+      - page.tsx：主页
+      - globals.css：Tailwind CSS 全局样式
+    - components/：React 组件
+      - Dashboard.tsx：主仪表盘
+      - Charts/：图表组件
+      - Tabs/：标签页组件
+      - Video/：视频组件
+    - hooks/：自定义 Hooks
+    - services/：API 与 WebSocket 服务
+    - stores/：Zustand 状态管理
+    - types/：TypeScript 类型定义
+  - dist/：构建输出目录（Next.js 静态导出）
 - rust_buffer/：Rust 高性能回放缓冲区
   - src/：Rust 源码
     - buffer.rs：回放缓冲区实现（SoA 布局）
@@ -75,7 +85,7 @@ bash scripts/build.sh
 - 检查 conda 是否可用
 - 创建/激活 `drl-arm` 环境
 - 安装所有 Python 依赖
-- 可选：构建 TypeScript 前端
+- 可选：构建 Next.js 前端
 - 可选：构建 Rust 回放缓冲区
 
 ### 2. 启动训练或绘图
@@ -90,7 +100,7 @@ bash scripts/start.sh
 3. 绘制训练曲线
 4. 绘制对比曲线
 5. 启动 Web UI（FastAPI 后端）
-6. 启动 TypeScript Dev Server + Web UI（推荐）
+6. 启动 Next.js Dev Server + Web UI（推荐）
 
 ## 配置说明
 
@@ -122,18 +132,19 @@ bash scripts/start.sh
 
 ```bash
 bash scripts/start.sh
-# 选择选项 6 - Launch TypeScript Dev Server + Web UI
+# 选择选项 6 - Launch Next.js Dev Server + Web UI
 ```
 
 这会自动：
 1. 启动 FastAPI 后端（http://127.0.0.1:8000）
-2. 启动 Vite 开发服务器（http://localhost:5173）
-3. Vite 自动代理 /api 和 /ws 请求到 FastAPI 后端
+2. 启动 Next.js 开发服务器（http://localhost:3000）
+3. Next.js 自动代理 /api 和 /ws 请求到 FastAPI 后端
 
 ### 生产模式
 
 ```bash
 cd web
+npm install
 npm run build
 bash scripts/start.sh
 # 选择选项 5 - Launch Web UI (FastAPI backend)
@@ -147,11 +158,13 @@ bash scripts/start.sh
 - **性能对比**：分布式 vs 单机训练指标对比
 - **一键生成视频**：生成分布式和单机训练结果的视频演示，支持独立播放和控制
 
-## TypeScript 前端特性
+## Next.js 前端特性
 
+- **Next.js 15 App Router**：最新的 React 框架，支持 SSR/SSG
+- **React 19**：最新版本 React
 - **完整的 TypeScript 类型安全**：所有数据结构都有类型定义
-- **React 18 + Zustand**：简洁的状态管理
-- **SCSS 样式系统**：变量管理、嵌套选择器、代码复用
+- **Zustand 5**：轻量级状态管理
+- **Tailwind CSS 3**：原子化 CSS，无需手写样式文件
 - **通用图表组件**：一个组件替代 12 个手动创建的图表，减少代码冗余 70%
 - **4 个核心指标展示**：训练速度、平均回报、损失、Buffer 大小
 - **WebSocket 实时数据推送**：自动重连机制
@@ -189,12 +202,12 @@ maturin develop --release
 - MuJoCo（物理仿真）
 
 ### 前端
+- Next.js 15（React 框架）
+- React 19
 - TypeScript
-- React 18
-- Zustand（状态管理）
-- SCSS（样式系统）
-- Chart.js（数据可视化）
-- Vite（构建工具）
+- Zustand 5（状态管理）
+- Tailwind CSS 3（样式系统）
+- Chart.js + react-chartjs-2（数据可视化）
 
 ### 性能优化
 - Rust + ndarray + Rayon

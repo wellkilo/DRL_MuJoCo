@@ -2,6 +2,8 @@
 #
 # 提供 Web 界面实时监控分布式训练过程
 # 功能：启动/停止训练、实时可视化训练指标、对比单机与分布式性能、视频演示
+#
+# 前端使用 Next.js + Tailwind CSS 构建，通过 `next build` 生成静态导出到 web/dist/
 
 from __future__ import annotations
 
@@ -16,7 +18,6 @@ from typing import Any, Union
 from fastapi import FastAPI, WebSocket
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
 
 # 添加项目根目录到路径
 import sys
@@ -30,6 +31,9 @@ app = FastAPI(title="DRL MuJoCo Web UI")
 REPO_ROOT = Path(__file__).parent.parent
 OUTPUT_DIR = REPO_ROOT / "output"
 OUTPUT_DIR.mkdir(exist_ok=True)  # 确保输出目录存在
+
+# Next.js 静态导出目录
+WEB_DIST = REPO_ROOT / "web" / "dist"
 
 # 全局变量
 training_task: asyncio.subprocess.Process | None = None  # 当前训练进程
@@ -69,8 +73,7 @@ def load_metrics_file(metrics_path: Path) -> list[dict[str, Any]]:
 
 @app.get("/")
 async def get_index() -> FileResponse:
-    """返回主页"""
-    WEB_DIST = REPO_ROOT / "web" / "dist"
+    """返回主页（Next.js 静态导出的 index.html）"""
     if (WEB_DIST / "index.html").exists():
         return FileResponse(WEB_DIST / "index.html")
     return FileResponse(REPO_ROOT / "web" / "index.html")
@@ -392,10 +395,12 @@ async def monitor_training() -> None:
 
 app.mount("/output", StaticFiles(directory=OUTPUT_DIR), name="output")
 
-# 为 TypeScript 前端添加静态资源服务（如果已构建）
-WEB_DIST = REPO_ROOT / "web" / "dist"
+# Next.js 静态导出资源服务
 if WEB_DIST.exists():
-    app.mount("/assets", StaticFiles(directory=WEB_DIST / "assets"), name="ts_assets")
+    # Next.js 导出的 _next 静态资源
+    next_static = WEB_DIST / "_next"
+    if next_static.exists():
+        app.mount("/_next", StaticFiles(directory=next_static), name="next_static")
 
 
 if __name__ == "__main__":

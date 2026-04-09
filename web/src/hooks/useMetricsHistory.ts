@@ -1,6 +1,8 @@
+'use client';
+
 import { useEffect } from 'react';
-import { useTrainingStore } from '../stores/trainingStore';
-import { getDistributedMetrics, getSingleMetrics } from '../services/api';
+import { useTrainingStore } from '@/stores/trainingStore';
+import { getDistributedMetrics, getSingleMetrics } from '@/services/api';
 
 export function useMetricsHistory() {
   const { setDistributedMetrics, setSingleMetrics } = useTrainingStore();

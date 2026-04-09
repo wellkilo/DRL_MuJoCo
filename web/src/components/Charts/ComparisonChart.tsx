@@ -1,4 +1,5 @@
-import React from 'react';
+'use client';
+
 import { Line } from 'react-chartjs-2';
 import {
   Chart as ChartJS,
@@ -11,7 +12,7 @@ import {
   Legend,
   Filler,
 } from 'chart.js';
-import { TrainingMetrics, MetricsKey } from '../../types/metrics';
+import { TrainingMetrics, MetricsKey } from '@/types/metrics';
 
 ChartJS.register(
   CategoryScale,
@@ -32,25 +33,24 @@ interface ComparisonChartProps {
   beginAtZero?: boolean;
 }
 
-export const ComparisonChart: React.FC<ComparisonChartProps> = ({
+export function ComparisonChart({
   title,
   distData,
   singleData,
   metricKey,
   beginAtZero = false,
-}) => {
-  const allSteps = Array.from(new Set([
-    ...distData.map(m => m.step),
-    ...singleData.map(m => m.step),
-  ])).sort((a, b) => a - b);
+}: ComparisonChartProps) {
+  const allSteps = Array.from(
+    new Set([...distData.map((m) => m.step), ...singleData.map((m) => m.step)])
+  ).sort((a, b) => a - b);
 
   const chartData = {
     labels: allSteps,
     datasets: [
       {
         label: 'Distributed',
-        data: allSteps.map(step => {
-          const m = distData.find(x => x.step === step);
+        data: allSteps.map((step) => {
+          const m = distData.find((x) => x.step === step);
           return m ? m[metricKey] : null;
         }),
         borderColor: '#667eea',
@@ -61,8 +61,8 @@ export const ComparisonChart: React.FC<ComparisonChartProps> = ({
       },
       {
         label: 'Single',
-        data: allSteps.map(step => {
-          const m = singleData.find(x => x.step === step);
+        data: allSteps.map((step) => {
+          const m = singleData.find((x) => x.step === step);
           return m ? m[metricKey] : null;
         }),
         borderColor: '#20c997',
@@ -89,4 +89,4 @@ export const ComparisonChart: React.FC<ComparisonChartProps> = ({
   };
 
   return <Line data={chartData} options={options} />;
-};
+}
