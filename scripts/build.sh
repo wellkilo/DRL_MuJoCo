@@ -58,18 +58,18 @@ echo "Additional Components (Optional)"
 echo "======================================"
 echo ""
 
-# Ask about TypeScript frontend
-read -p "Build TypeScript frontend? [y/N]: " build_ts
-if [[ "$build_ts" =~ ^[Yy]$ ]]; then
+# Ask about Next.js frontend
+read -p "Build Next.js frontend? [y/N]: " build_next
+if [[ "$build_next" =~ ^[Yy]$ ]]; then
     if command -v npm &> /dev/null; then
-        echo "Building TypeScript frontend..."
+        echo "Building Next.js frontend..."
         cd "$REPO_ROOT/web"
         npm install
         npm run build
         cd "$REPO_ROOT"
-        echo "TypeScript frontend built successfully!"
+        echo "Next.js frontend built successfully!"
     else
-        echo "WARNING: npm not found. Skipping TypeScript frontend build."
+        echo "WARNING: npm not found. Skipping Next.js frontend build."
         echo "Install Node.js from https://nodejs.org/ to build frontend."
     fi
 fi
@@ -101,7 +101,7 @@ echo ""
 echo "To run training/UI:"
 echo "  bash scripts/start.sh"
 echo ""
-echo "To build TypeScript frontend manually:"
+echo "To build Next.js frontend manually:"
 echo "  cd web && npm install && npm run build"
 echo ""
 echo "To build Rust Buffer manually:"

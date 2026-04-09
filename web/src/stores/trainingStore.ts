@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { TrainingMetrics, VideoStatus } from '../types/metrics';
+import { TrainingMetrics, VideoStatus } from '@/types/metrics';
 
 interface TrainingState {
   isRunning: boolean;

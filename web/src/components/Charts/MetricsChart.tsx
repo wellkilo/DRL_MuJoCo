@@ -1,4 +1,5 @@
-import React from 'react';
+'use client';
+
 import { Line } from 'react-chartjs-2';
 import {
   Chart as ChartJS,
@@ -11,7 +12,7 @@ import {
   Legend,
   Filler,
 } from 'chart.js';
-import { TrainingMetrics, MetricsKey } from '../../types/metrics';
+import { TrainingMetrics, MetricsKey } from '@/types/metrics';
 
 ChartJS.register(
   CategoryScale,
@@ -33,21 +34,21 @@ interface MetricsChartProps {
   beginAtZero?: boolean;
 }
 
-export const MetricsChart: React.FC<MetricsChartProps> = ({
+export function MetricsChart({
   title,
   data,
   metricKey,
   color,
   label,
   beginAtZero = false,
-}) => {
+}: MetricsChartProps) {
   const safeData = data || [];
   const chartData = {
-    labels: safeData.map(m => m.step),
+    labels: safeData.map((m) => m.step),
     datasets: [
       {
         label: label || title,
-        data: safeData.map(m => m[metricKey]),
+        data: safeData.map((m) => m[metricKey]),
         borderColor: color,
         backgroundColor: color + '20',
         fill: true,
@@ -72,4 +73,4 @@ export const MetricsChart: React.FC<MetricsChartProps> = ({
   };
 
   return <Line data={chartData} options={options} />;
-};
+}
