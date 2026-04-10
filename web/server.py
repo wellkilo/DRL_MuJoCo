@@ -33,7 +33,7 @@ OUTPUT_DIR = REPO_ROOT / "output"
 OUTPUT_DIR.mkdir(exist_ok=True)  # 确保输出目录存在
 
 # Next.js 静态导出目录
-WEB_DIST = REPO_ROOT / "web" / "dist"
+WEB_DIST = REPO_ROOT / "web" / "out"
 
 # 全局变量
 training_task: asyncio.subprocess.Process | None = None  # 当前训练进程
@@ -401,6 +401,14 @@ if WEB_DIST.exists():
     next_static = WEB_DIST / "_next"
     if next_static.exists():
         app.mount("/_next", StaticFiles(directory=next_static), name="next_static")
+
+    # favicon / icon.svg
+    @app.get("/icon.svg")
+    async def get_icon_svg() -> FileResponse:
+        icon_path = WEB_DIST / "icon.svg"
+        if icon_path.exists():
+            return FileResponse(icon_path, media_type="image/svg+xml")
+        return FileResponse(REPO_ROOT / "web" / "src" / "app" / "icon.svg", media_type="image/svg+xml")
 
 
 if __name__ == "__main__":

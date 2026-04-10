@@ -18,7 +18,7 @@ temp_*.py
 
 # TypeScript / Node.js
 web/node_modules/
-web/dist/
+web/out/
 web/.next/
 web/tsconfig.tsbuildinfo
 
