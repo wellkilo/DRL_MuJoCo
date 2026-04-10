@@ -86,8 +86,11 @@ export default function Dashboard() {
   }, [setIsRunning, setIsLoading, setError]);
 
   // Get latest metric values for KPI cards
+  const isComparison = activeTab === 'comparison';
   const activeMetrics = activeTab === 'single' ? singleMetrics : distributedMetrics;
   const latest = activeMetrics[activeMetrics.length - 1];
+  const latestDist = distributedMetrics[distributedMetrics.length - 1];
+  const latestSingle = singleMetrics[singleMetrics.length - 1];
 
   const tabs = [
     { key: 'distributed' as const, label: '分布式训练', icon: '⚡' },
@@ -96,7 +99,48 @@ export default function Dashboard() {
     { key: 'video' as const, label: '视频演示', icon: '🎬' },
   ];
 
-  const kpiCards = [
+  const kpiCards = isComparison ? [
+    {
+      label: '训练速度',
+      distValue: latestDist?.sps != null ? latestDist.sps.toLocaleString() : '—',
+      singleValue: latestSingle?.sps != null ? latestSingle.sps.toLocaleString() : '—',
+      unit: 'SPS',
+      color: 'text-chart-blue',
+      bgColor: 'from-chart-blue/10 to-chart-blue/5',
+      borderColor: 'border-chart-blue/20',
+      icon: '🚀',
+    },
+    {
+      label: '平均回报',
+      distValue: latestDist?.avg_return != null ? latestDist.avg_return.toFixed(1) : '—',
+      singleValue: latestSingle?.avg_return != null ? latestSingle.avg_return.toFixed(1) : '—',
+      unit: '',
+      color: 'text-chart-amber',
+      bgColor: 'from-chart-amber/10 to-chart-amber/5',
+      borderColor: 'border-chart-amber/20',
+      icon: '📈',
+    },
+    {
+      label: '总损失',
+      distValue: latestDist?.loss != null ? latestDist.loss.toFixed(4) : '—',
+      singleValue: latestSingle?.loss != null ? latestSingle.loss.toFixed(4) : '—',
+      unit: '',
+      color: 'text-chart-rose',
+      bgColor: 'from-chart-rose/10 to-chart-rose/5',
+      borderColor: 'border-chart-rose/20',
+      icon: '📉',
+    },
+    {
+      label: 'Buffer 大小',
+      distValue: latestDist?.buffer_size != null ? latestDist.buffer_size.toLocaleString() : '—',
+      singleValue: latestSingle?.buffer_size != null ? latestSingle.buffer_size.toLocaleString() : '—',
+      unit: '',
+      color: 'text-chart-emerald',
+      bgColor: 'from-chart-emerald/10 to-chart-emerald/5',
+      borderColor: 'border-chart-emerald/20',
+      icon: '💾',
+    },
+  ] : [
     {
       label: '训练速度',
       value: latest?.sps != null ? latest.sps.toLocaleString() : '—',
@@ -195,7 +239,7 @@ export default function Dashboard() {
       )}
 
       {/* KPI Summary Cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4 mb-6">
+      <div className={`gap-3 md:gap-4 mb-6 ${isComparison ? 'grid grid-cols-2 lg:grid-cols-4' : 'grid grid-cols-2 lg:grid-cols-4'}`}>
         {kpiCards.map((card) => (
           <div
             key={card.label}
@@ -207,14 +251,31 @@ export default function Dashboard() {
               </span>
               <span className="text-lg">{card.icon}</span>
             </div>
-            <div className="flex items-baseline gap-1.5">
-              <span className={`text-xl md:text-2xl font-bold font-mono ${card.color}`}>
-                {card.value}
-              </span>
-              {card.unit && (
-                <span className="text-text-muted text-xs font-medium">{card.unit}</span>
-              )}
-            </div>
+            {isComparison && 'distValue' in card ? (
+              <div className="space-y-1.5">
+                <div className="flex items-baseline gap-1.5">
+                  <span className="text-xs text-primary font-medium">分布式</span>
+                  <span className={`text-lg font-bold font-mono ${card.color}`}>
+                    {card.distValue}
+                  </span>
+                </div>
+                <div className="flex items-baseline gap-1.5">
+                  <span className="text-xs text-accent font-medium">单机</span>
+                  <span className={`text-lg font-bold font-mono text-accent`}>
+                    {card.singleValue}
+                  </span>
+                </div>
+              </div>
+            ) : (
+              <div className="flex items-baseline gap-1.5">
+                <span className={`text-xl md:text-2xl font-bold font-mono ${card.color}`}>
+                  {'value' in card ? card.value : '—'}
+                </span>
+                {card.unit && (
+                  <span className="text-text-muted text-xs font-medium">{card.unit}</span>
+                )}
+              </div>
+            )}
           </div>
         ))}
       </div>
