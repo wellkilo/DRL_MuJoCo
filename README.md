@@ -1,214 +1,357 @@
-# DRL MuJoCo 分布式训练原型
+<div align="center">
 
-本项目实现基于 Ray 的分布式 Actor-Learner 架构，面向 MuJoCo 环境进行并行采样与学习。项目包含 Next.js 前端和 Rust 高性能回放缓冲区优化。
+# 🤖 DRL MuJoCo
 
-## 结果视图体系
+**分布式深度强化学习训练框架**
 
-### Web UI 总界面
-![Web UI 总界面](assets/web_ui.png)
-完整的 Web UI 界面，包含训练控制、实时监控、在线绘图和视频演示功能，构成一个完整的训练与结果展示闭环。
+基于 Ray 的 Actor-Learner 架构，面向 MuJoCo 环境进行并行采样与策略优化
 
-### 分布式训练视图
-![分布式训练视图](assets/web_ui_distributed.png)
-实时监控分布式训练过程的核心指标，包括训练速度（SPS）、平均回报、损失函数和回放池大小等，帮助您了解分布式架构下的训练效率和收敛情况。
+[![Next.js](https://img.shields.io/badge/Next.js-15-black?logo=next.js)](https://nextjs.org/)
+[![React](https://img.shields.io/badge/React-19-61DAFB?logo=react)](https://react.dev/)
+[![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-3-06B6D4?logo=tailwindcss)](https://tailwindcss.com/)
+[![Python](https://img.shields.io/badge/Python-3.9+-3776AB?logo=python)](https://python.org/)
+[![PyTorch](https://img.shields.io/badge/PyTorch-2.x-EE4C2C?logo=pytorch)](https://pytorch.org/)
+[![Ray](https://img.shields.io/badge/Ray-2.x-028CF0?logo=ray)](https://ray.io/)
+[![Rust](https://img.shields.io/badge/Rust-1.70+-000000?logo=rust)](https://rust-lang.org/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-009688?logo=fastapi)](https://fastapi.tiangolo.com/)
 
-### 单机训练视图
-![单机训练视图](assets/web_ui_single.png)
-与分布式训练视图对应，展示单机模式下的训练指标，为后续的对比分析提供基准数据。通过与分布式视图的横向对比，可以直观评估并行采样带来的性能提升。
+</div>
 
-### 对比视图
-![对比视图](assets/web_ui_comparison.png)
-基于分布式和单机训练的历史数据，生成直观的对比曲线，重点展示训练速度（SPS）和平均回报的差异，帮助量化分析分布式训练的优势。
+---
 
-### 视频演示界面
-![视频演示界面](assets/web_video_demo.gif)
-训练完成后，一键生成分布式和单机训练结果的视频演示，直观展示智能体在 MuJoCo 环境中的表现。两个视频支持独立播放和控制，便于进行策略效果的直观对比。
+## ✨ 核心特性
 
-## 功能概览
+<table>
+<tr>
+<td width="50%">
 
-- Actor 采样器并行与环境交互
-- ReplayBuffer 经验回放
-- Learner 进行策略更新
-- ParameterServer 分发最新参数
-- 支持 CUDA / MPS / CPU 自动选择
-- **Next.js 前端**：React 19 + Next.js 15 + TypeScript + Zustand + Tailwind CSS 4，类型安全，现代 UI
-- **Rust 高性能回放缓冲区**：SoA 内存布局 + 并行 GAE 计算
-- **Web UI 可视化界面**：实时监控训练过程，一键启动/停止，在线绘图
+### 🚀 分布式训练
+- **Actor-Learner 架构**：Ray 驱动的并行采样
+- **Parameter Server**：异步参数同步
+- **PPO 算法**：裁剪机制 + 自适应熵系数
+- **GAE**：广义优势估计
+- **自动设备选择**：CUDA → MPS → CPU
 
-## 目录结构
+</td>
+<td width="50%">
 
-- main.py：训练入口
-- drl/：分布式组件与模型实现
-- config/：配置文件目录
-  - config.yaml：分布式训练配置
-  - config_single.yaml：单机训练配置
-- output/：输出目录（训练数据、绘图结果）
-- scripts/：辅助脚本目录
-  - plot_training.py：训练曲线绘制脚本
-  - plot_comparison.py：单机与分布式对比曲线绘制脚本
-  - build.sh：环境与依赖安装脚本
-  - start.sh：训练与绘图启动脚本
-- web/：Web UI 目录
-  - server.py：FastAPI 后端服务
-  - src/：Next.js 前端源码
-    - app/：Next.js App Router 页面
-      - layout.tsx：根布局
-      - page.tsx：主页
-      - globals.css：Tailwind CSS 全局样式
-    - components/：React 组件
-      - Dashboard.tsx：主仪表盘
-      - Charts/：图表组件
-      - Tabs/：标签页组件
-      - Video/：视频组件
-    - hooks/：自定义 Hooks
-    - services/：API 与 WebSocket 服务
-    - stores/：Zustand 状态管理
-    - types/：TypeScript 类型定义
-  - dist/：构建输出目录（Next.js 静态导出）
-- rust_buffer/：Rust 高性能回放缓冲区
-  - src/：Rust 源码
-    - buffer.rs：回放缓冲区实现（SoA 布局）
-    - gae.rs：并行 GAE 计算
-    - lib.rs：PyO3 Python 绑定
-  - Cargo.toml：Rust 项目配置
-  - pyproject.toml：Maturin 配置
+### 📊 实时可视化
+- **Next.js 15** + **React 19** + **Tailwind CSS 3**
+- **4 核心指标**：SPS、平均回报、损失、Buffer 大小
+- **WebSocket 实时推送**：自动重连机制
+- **性能对比**：分布式 vs 单机训练
+- **一键生成视频**：智能体表现演示
 
-## 快速开始
+</td>
+</tr>
+<tr>
+<td width="50%">
 
-### 1. 环境与依赖安装
+### ⚡ Rust 高性能缓冲区
+- **SoA 内存布局**：连续内存，缓存友好
+- **Rayon 并行 GAE**：多线程优势函数计算
+- **PyO3 绑定**：无缝集成 Python
+- **目标 10-50x** 内存操作加速
+
+</td>
+<td width="50%">
+
+### 🧠 PPO 优化
+- 全局 Advantage 标准化
+- 学习率线性衰减
+- 梯度裁剪 + KL 散度早停
+- 价值函数解释方差监控
+- Clip Fraction 实时追踪
+
+</td>
+</tr>
+</table>
+
+---
+
+## 🖼️ 界面预览
+
+<table>
+<tr>
+<td align="center"><b>🖥️ Web UI 总界面</b></td>
+<td align="center"><b>📊 分布式训练监控</b></td>
+</tr>
+<tr>
+<td><img src="assets/web_ui.png" alt="Web UI" width="100%"></td>
+<td><img src="assets/web_ui_distributed.png" alt="Distributed" width="100%"></td>
+</tr>
+<tr>
+<td align="center"><b>📈 单机训练监控</b></td>
+<td align="center"><b>⚖️ 性能对比视图</b></td>
+</tr>
+<tr>
+<td><img src="assets/web_ui_single.png" alt="Single" width="100%"></td>
+<td><img src="assets/web_ui_comparison.png" alt="Comparison" width="100%"></td>
+</tr>
+</table>
+
+<div align="center">
+<img src="assets/web_video_demo.gif" alt="Video Demo" width="60%">
+<p><b>🎬 视频演示：一键生成分布式 & 单机训练结果对比视频</b></p>
+</div>
+
+---
+
+## 🏗️ 项目结构
+
+```
+DRL_MuJoCo/
+├── main.py                    # 训练入口
+├── drl/                       # 核心 DRL 模块
+│   ├── config.py              # 配置 dataclass
+│   ├── config_loader.py       # YAML 配置加载
+│   ├── models.py              # Actor-Critic 模型
+│   ├── ray_components.py      # Ray 分布式组件
+│   ├── logging_utils.py       # 日志工具
+│   └── video_generator.py     # 视频生成
+├── config/                    # 配置文件
+│   ├── config.yaml            # 分布式训练 (8 Actors)
+│   └── config_single.yaml     # 单机训练 (1 Actor)
+├── web/                       # Web UI
+│   ├── server.py              # FastAPI 后端
+│   ├── next.config.ts         # Next.js 配置
+│   ├── tailwind.config.ts     # Tailwind 主题配置
+│   └── src/
+│       ├── app/               # Next.js App Router
+│       ├── components/        # React 组件
+│       ├── hooks/             # 自定义 Hooks
+│       ├── services/          # API & WebSocket
+│       ├── stores/            # Zustand 状态
+│       └── types/             # TypeScript 类型
+├── rust_buffer/               # Rust 高性能缓冲区
+│   ├── src/
+│   │   ├── buffer.rs          # SoA 回放缓冲区
+│   │   ├── gae.rs             # 并行 GAE 计算
+│   │   └── lib.rs             # PyO3 绑定
+│   ├── Cargo.toml
+│   └── pyproject.toml
+└── scripts/                   # 辅助脚本
+    ├── build.sh               # 环境搭建
+    ├── start.sh               # 交互式启动器
+    ├── plot_training.py       # 训练曲线
+    └── plot_comparison.py     # 对比曲线
+```
+
+---
+
+## 🚀 快速开始
+
+### 1️⃣ 环境搭建
 
 ```bash
 bash scripts/build.sh
 ```
 
-该脚本会：
-- 检查 conda 是否可用
-- 创建/激活 `drl-arm` 环境
-- 安装所有 Python 依赖
-- 可选：构建 Next.js 前端
-- 可选：构建 Rust 回放缓冲区
+该脚本将自动：
+- ✅ 检查 & 创建 conda 环境 (`drl-arm`)
+- ✅ 安装 Python 依赖 (PyTorch, Ray, MuJoCo...)
+- ✅ 可选构建 Next.js 前端
+- ✅ 可选构建 Rust 回放缓冲区
 
-### 2. 启动训练或绘图
+### 2️⃣ 启动训练
 
 ```bash
 bash scripts/start.sh
 ```
 
-该脚本提供交互式菜单，支持：
-1. 分布式训练（8 个 Actor）
-2. 单机训练（1 个 Actor）
-3. 绘制训练曲线
-4. 绘制对比曲线
-5. 启动 Web UI（FastAPI 后端）
-6. 启动 Next.js Dev Server + Web UI（推荐）
+| 选项 | 描述 |
+|:----:|------|
+| `1` | 分布式训练 (8 Actors) |
+| `2` | 单机训练 (1 Actor) |
+| `3` | 绘制训练曲线 |
+| `4` | 绘制对比曲线 |
+| `5` | 启动 Web UI (生产模式) |
+| `6` | 🌟 启动 Next.js Dev Server + Web UI (推荐) |
 
-## 配置说明
+### 3️⃣ 访问 Web UI
 
-通过 config/config.yaml 调整超参和运行配置，常用参数如下：
+选择选项 `6` 后，打开浏览器访问 **http://localhost:3000**
 
-- env_name：MuJoCo 环境
-- num_actors：并行采样器数量
-- replay_buffer_capacity：回放池容量
-- batch_size：训练批次大小
-- lr：学习率
-- hidden_sizes：策略与价值网络隐藏层大小
-- use_cuda / use_mps：设备开关
-- metrics_path：指标输出文件路径
+---
 
-## 单机与分布式对比实验
+## ⚙️ 配置说明
 
-要对比单机训练和分布式训练的效果，可以通过 `bash scripts/start.sh` 依次选择：
-1. 运行单机训练
-2. 运行分布式训练
-3. 绘制对比曲线
+编辑 [`config/config.yaml`](config/config.yaml) 调整训练超参：
 
-生成 `output/comparison_curves.png`，对比：
-- 训练速度（SPS）
-- 平均回报（收敛速度）
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `env_name` | `Hopper-v5` | MuJoCo 环境名称 |
+| `num_actors` | `8` | 并行采样器数量 |
+| `rollout_length` | `2048` | 单次采样轨迹长度 |
+| `batch_size` | `64` | 训练批次大小 |
+| `lr` | `0.0003` | 学习率 |
+| `gamma` | `0.99` | 折扣因子 |
+| `gae_lambda` | `0.95` | GAE λ 参数 |
+| `clip_ratio` | `0.2` | PPO 裁剪比率 |
+| `hidden_sizes` | `[64, 64]` | 隐藏层大小 |
+| `max_iters` | `3000` | 最大训练迭代数 |
+| `lr_schedule` | `linear` | 学习率调度策略 |
+| `target_kl` | `0.02` | KL 散度早停阈值 |
 
-## Web UI 可视化
+---
 
-### 开发模式（推荐）
+## 📊 单机 vs 分布式对比实验
 
 ```bash
-bash scripts/start.sh
-# 选择选项 6 - Launch Next.js Dev Server + Web UI
+# 1. 运行单机训练
+bash scripts/start.sh  # 选择 2
+
+# 2. 运行分布式训练
+bash scripts/start.sh  # 选择 1
+
+# 3. 绘制对比曲线
+bash scripts/start.sh  # 选择 4
 ```
 
-这会自动：
-1. 启动 FastAPI 后端（http://127.0.0.1:8000）
-2. 启动 Next.js 开发服务器（http://localhost:3000）
-3. Next.js 自动代理 /api 和 /ws 请求到 FastAPI 后端
+生成 `output/comparison_curves.png`，对比 **训练速度 (SPS)** 和 **平均回报**。
+
+---
+
+## 🌐 Web UI 详细说明
+
+### 开发模式
+
+```bash
+bash scripts/start.sh  # 选择 6
+```
+
+自动启动：
+1. **FastAPI 后端** → http://127.0.0.1:8000
+2. **Next.js 开发服务器** → http://localhost:3000
+3. API 请求自动代理到 FastAPI
 
 ### 生产模式
 
 ```bash
-cd web
-npm install
-npm run build
-bash scripts/start.sh
-# 选择选项 5 - Launch Web UI (FastAPI backend)
+cd web && npm install && npm run build && cd ..
+bash scripts/start.sh  # 选择 5
+# 访问 http://127.0.0.1:8000
 ```
 
-### Web UI 功能
+### 功能列表
 
-- **开始/停止训练**：一键控制训练进程
-- **实时监控**：通过 WebSocket 实时更新训练指标
-- **在线绘图**：实时显示训练速度、平均回报、损失、回放池大小曲线
-- **性能对比**：分布式 vs 单机训练指标对比
-- **一键生成视频**：生成分布式和单机训练结果的视频演示，支持独立播放和控制
+| 功能 | 描述 |
+|------|------|
+| 🎮 训练控制 | 一键启动/停止分布式 & 单机训练 |
+| 📡 实时监控 | WebSocket 推送 SPS、回报、损失、Buffer 大小 |
+| 📈 在线绘图 | Chart.js 实时训练曲线 |
+| ⚖️ 性能对比 | 分布式 vs 单机同屏对比 |
+| 🎬 视频生成 | 一键生成智能体表现视频，支持重生成 |
 
-## Next.js 前端特性
+---
 
-- **Next.js 15 App Router**：最新的 React 框架，支持 SSR/SSG
-- **React 19**：最新版本 React
-- **完整的 TypeScript 类型安全**：所有数据结构都有类型定义
-- **Zustand 5**：轻量级状态管理
-- **Tailwind CSS 3**：原子化 CSS，无需手写样式文件
-- **通用图表组件**：一个组件替代 12 个手动创建的图表，减少代码冗余 70%
-- **4 个核心指标展示**：训练速度、平均回报、损失、Buffer 大小
-- **WebSocket 实时数据推送**：自动重连机制
-- **响应式设计**：适配不同屏幕尺寸
+## 🦀 Rust 回放缓冲区
 
-## Rust 回放缓冲区特性
+<details>
+<summary>📖 点击展开详情</summary>
 
-- **Structure of Arrays (SoA) 内存布局**：连续内存，更好的缓存局部性
-- **并行 GAE 计算**：使用 Rayon 多线程并行计算优势函数
-- **PyO3 Python 绑定**：无缝集成到现有 Python 代码
-- **目标性能提升**：10-50x 内存操作速度提升
+### 特性
 
-### 构建 Rust 回放缓冲区
+- **Structure of Arrays (SoA)** 内存布局 — 连续内存，缓存局部性更优
+- **Rayon 并行 GAE** — 多线程并行计算优势函数
+- **PyO3 Python 绑定** — 无缝集成到现有 Python 训练代码
+- **目标 10-50x** 内存操作速度提升
+
+### 构建
 
 ```bash
-bash scripts/build.sh
-# 选择构建 Rust Buffer
-```
+# 方式一：通过构建脚本
+bash scripts/build.sh  # 选择构建 Rust Buffer
 
-或手动构建：
-
-```bash
+# 方式二：手动构建
 cd rust_buffer
 pip install maturin
 maturin develop --release
 ```
 
-## 技术栈
+> ⚠️ 需要先安装 Rust：`curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
 
-### 后端
-- Python 3.9+
-- FastAPI（Web 服务）
-- Ray（分布式计算）
-- PyTorch（深度学习）
-- MuJoCo（物理仿真）
+</details>
 
-### 前端
-- Next.js 15（React 框架）
-- React 19
-- TypeScript
-- Zustand 5（状态管理）
-- Tailwind CSS 3（样式系统）
-- Chart.js + react-chartjs-2（数据可视化）
+---
 
-### 性能优化
-- Rust + ndarray + Rayon
-- PyO3（Python 绑定）
+## 🛠️ 技术栈
+
+<table>
+<tr>
+<th>后端</th>
+<th>前端</th>
+<th>性能优化</th>
+</tr>
+<tr>
+<td>
+
+![Python](https://img.shields.io/badge/Python-3.9+-3776AB?logo=python&logoColor=white)
+![PyTorch](https://img.shields.io/badge/PyTorch-2.x-EE4C2C?logo=pytorch&logoColor=white)
+![Ray](https://img.shields.io/badge/Ray-2.x-028CF0?logo=ray&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-009688?logo=fastapi&logoColor=white)
+![MuJoCo](https://img.shields.io/badge/MuJoCo-2.3-000000?logo=data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHRleHQgZmlsbD0id2hpdGUiIGZvbnQtc2l6ZT0iMTQiIHg9IjIiIHk9IjE4Ij5NPC90ZXh0Pjwvc3ZnPg==)
+
+</td>
+<td>
+
+![Next.js](https://img.shields.io/badge/Next.js-15-000000?logo=next.js&logoColor=white)
+![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)
+![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6?logo=typescript&logoColor=white)
+![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-3-06B6D4?logo=tailwindcss&logoColor=white)
+![Zustand](https://img.shields.io/badge/Zustand-5-443E38)
+![Chart.js](https://img.shields.io/badge/Chart.js-4-FF6384?logo=chart.js&logoColor=white)
+
+</td>
+<td>
+
+![Rust](https://img.shields.io/badge/Rust-1.70+-000000?logo=rust&logoColor=white)
+![ndarray](https://img.shields.io/badge/ndarray-0.15-D68A00)
+![Rayon](https://img.shields.io/badge/Rayon-1.8-FF6D00)
+![PyO3](https://img.shields.io/badge/PyO3-0.20-D64045)
+
+</td>
+</tr>
+</table>
+
+---
+
+## 🏛️ 架构概览
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                     Next.js Frontend                     │
+│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌───────────┐  │
+│  │Distributed│ │  Single  │ │Comparison│ │   Video   │  │
+│  │   Tab     │ │   Tab    │ │   Tab    │ │  Section  │  │
+│  └─────┬─────┘ └─────┬────┘ └─────┬────┘ └─────┬─────┘  │
+│        └──────────────┼───────────┼─────────────┘        │
+│                  ┌─────┴─────┐                            │
+│                  │  Zustand  │                            │
+│                  │   Store   │                            │
+│                  └─────┬─────┘                            │
+│            ┌───────────┼───────────┐                      │
+│       ┌────┴────┐     │     ┌─────┴────┐                │
+│       │REST API │     │     │WebSocket │                │
+│       └────┬────┘     │     └─────┬────┘                │
+└────────────┼──────────┼───────────┼──────────────────────┘
+             │          │           │
+┌────────────┼──────────┼───────────┼──────────────────────┐
+│        ┌───┴──────────┴───────────┴───┐                  │
+│        │       FastAPI Backend        │                  │
+│        └───────────────┬──────────────┘                  │
+│                   ┌────┴────┐                             │
+│                   │  Ray    │                             │
+│                   │ Cluster │                             │
+│        ┌──────────┼────────┼──────────┐                  │
+│   ┌────┴────┐ ┌───┴───┐ ┌───┴───┐ ┌──┴──┐              │
+│   │ Actor 0 │ │Actor 1│ │Actor N│ │Learner│             │
+│   └────┬────┘ └───┬───┘ └───┬───┘ └──┬──┘              │
+│        └──────────┼──────────┼────────┘                  │
+│              ┌────┴────┐                                  │
+│              │  Param  │                                  │
+│              │ Server  │                                  │
+│              └─────────┘                                  │
+│                     Backend (Python)                      │
+└──────────────────────────────────────────────────────────┘
+```
