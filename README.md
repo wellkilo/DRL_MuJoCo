@@ -14,7 +14,6 @@
 [![Ray](https://img.shields.io/badge/Ray-2.x-028CF0?logo=ray)](https://ray.io/)
 [![Rust](https://img.shields.io/badge/Rust-1.70+-000000?logo=rust)](https://rust-lang.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-009688?logo=fastapi)](https://fastapi.tiangolo.com/)
-[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
 </div>
 
@@ -356,11 +355,3 @@ maturin develop --release
 │                     Backend (Python)                      │
 └──────────────────────────────────────────────────────────┘
 ```
-
----
-
-<div align="center">
-
-**Made with ❤️ by [wellkilo](https://github.com/wellkilo)**
-
-</div>
