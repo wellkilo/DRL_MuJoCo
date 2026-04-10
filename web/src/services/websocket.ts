@@ -7,6 +7,9 @@ export class WebSocketManager {
   private subscribers: Set<MetricsCallback> = new Set();
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private isManualClose: boolean = false;
+  private reconnectAttempts: number = 0;
+  private static readonly MAX_RECONNECT_ATTEMPTS = 10;
+  private static readonly BASE_DELAY = 1000;
 
   connect() {
     if (this.ws?.readyState === WebSocket.OPEN) return;
@@ -19,6 +22,7 @@ export class WebSocketManager {
 
     this.ws.onopen = () => {
       console.log('[WebSocket] Connected');
+      this.reconnectAttempts = 0;
       if (this.reconnectTimer) {
         clearTimeout(this.reconnectTimer);
         this.reconnectTimer = null;
@@ -50,6 +54,7 @@ export class WebSocketManager {
 
   disconnect() {
     this.isManualClose = true;
+    this.reconnectAttempts = 0;
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
@@ -70,13 +75,28 @@ export class WebSocketManager {
   }
 
   private scheduleReconnect() {
+    if (this.reconnectAttempts >= WebSocketManager.MAX_RECONNECT_ATTEMPTS) {
+      console.warn('[WebSocket] Max reconnect attempts reached, giving up');
+      return;
+    }
+
     if (this.reconnectTimer) return;
+
+    // Exponential backoff: 1s, 2s, 4s, 8s, 16s... capped at 30s
+    const delay = Math.min(
+      WebSocketManager.BASE_DELAY * Math.pow(2, this.reconnectAttempts),
+      30000
+    );
+
+    this.reconnectAttempts++;
+    console.log(`[WebSocket] Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts}/${WebSocketManager.MAX_RECONNECT_ATTEMPTS})`);
+
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       if (!this.isManualClose) {
         this.connect();
       }
-    }, 1000);
+    }, delay);
   }
 }
 

@@ -19,8 +19,12 @@ import { VideoSection } from '@/components/Video/VideoSection';
 export default function Dashboard() {
   const {
     isRunning,
+    isLoading,
+    error,
     activeTab,
     setIsRunning,
+    setIsLoading,
+    setError,
     setActiveTab,
     distributedMetrics,
     singleMetrics,
@@ -32,26 +36,54 @@ export default function Dashboard() {
   useTrainingStream();
 
   const handleStartDistributed = useCallback(async () => {
-    const data = await startDistributedTraining();
-    if (data.status === 'started' || data.status === 'already running') {
-      setIsRunning(true);
-      wsManager.connect();
+    try {
+      setIsLoading(true);
+      setError(null);
+      const data = await startDistributedTraining();
+      if (data.status === 'started' || data.status === 'already running') {
+        setIsRunning(true);
+        wsManager.connect();
+      } else {
+        setError(`启动分布式训练失败: ${data.status}`);
+      }
+    } catch (e) {
+      setError(`请求失败: ${e instanceof Error ? e.message : '未知错误'}`);
+    } finally {
+      setIsLoading(false);
     }
-  }, [setIsRunning]);
+  }, [setIsRunning, setIsLoading, setError]);
 
   const handleStartSingle = useCallback(async () => {
-    const data = await startSingleTraining();
-    if (data.status === 'started' || data.status === 'already running') {
-      setIsRunning(true);
-      wsManager.connect();
+    try {
+      setIsLoading(true);
+      setError(null);
+      const data = await startSingleTraining();
+      if (data.status === 'started' || data.status === 'already running') {
+        setIsRunning(true);
+        wsManager.connect();
+      } else {
+        setError(`启动单机训练失败: ${data.status}`);
+      }
+    } catch (e) {
+      setError(`请求失败: ${e instanceof Error ? e.message : '未知错误'}`);
+    } finally {
+      setIsLoading(false);
     }
-  }, [setIsRunning]);
+  }, [setIsRunning, setIsLoading, setError]);
 
   const handleStop = useCallback(async () => {
-    await stopTraining();
-    setIsRunning(false);
-    wsManager.disconnect();
-  }, [setIsRunning]);
+    try {
+      setIsLoading(true);
+      setError(null);
+      await stopTraining();
+      setIsRunning(false);
+      wsManager.disconnect();
+    } catch (e) {
+      setError(`停止训练失败: ${e instanceof Error ? e.message : '未知错误'}`);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [setIsRunning, setIsLoading, setError]);
 
   // Get latest metric values for KPI cards
   const activeMetrics = activeTab === 'single' ? singleMetrics : distributedMetrics;
@@ -122,7 +154,7 @@ export default function Dashboard() {
             {/* Theme Toggle */}
             <button
               onClick={toggleTheme}
-              className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium bg-surface-600/50 border border-border-dark hover:bg-surface-500 hover:border-border-light transition-all duration-200"
+              className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium bg-surface-600 border border-border-dark hover:bg-surface-500 hover:border-border-light transition-all duration-200"
               title={isDark ? '切换到浅色主题' : '切换到深色主题'}
             >
               {isDark ? '☀️' : '🌙'}
@@ -132,7 +164,7 @@ export default function Dashboard() {
             <div className={`flex items-center gap-2.5 px-4 py-2 rounded-full text-sm font-medium ${
               isRunning
                 ? 'bg-success/10 text-success-light border border-success/20'
-                : 'bg-surface-600/50 text-text-secondary border border-border-dark'
+                : 'bg-surface-600 text-text-secondary border border-border-dark'
             }`}>
               <span className="relative flex h-2.5 w-2.5">
                 {isRunning && (
@@ -147,6 +179,20 @@ export default function Dashboard() {
           </div>
         </div>
       </div>
+
+      {/* Error Banner */}
+      {error && (
+        <div className="mb-4 flex items-center gap-3 px-4 py-3 rounded-xl bg-danger/10 border border-danger/20 text-danger-light text-sm animate-slide-up">
+          <span>❌</span>
+          <span className="flex-1">{error}</span>
+          <button
+            onClick={() => setError(null)}
+            className="text-danger-light/60 hover:text-danger-light transition-colors text-lg leading-none"
+          >
+            ×
+          </button>
+        </div>
+      )}
 
       {/* KPI Summary Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4 mb-6">
@@ -179,36 +225,36 @@ export default function Dashboard() {
           <button
             className="btn-primary"
             onClick={handleStartDistributed}
-            disabled={isRunning}
+            disabled={isRunning || isLoading}
           >
-            ⚡ 启动分布式训练
+            {isLoading ? '⏳ 处理中...' : '⚡ 启动分布式训练'}
           </button>
           <button
             className="btn-success"
             onClick={handleStartSingle}
-            disabled={isRunning}
+            disabled={isRunning || isLoading}
           >
-            🖥️ 启动单机训练
+            {isLoading ? '⏳ 处理中...' : '🖥️ 启动单机训练'}
           </button>
           <button
             className="btn-danger"
             onClick={handleStop}
-            disabled={!isRunning}
+            disabled={!isRunning || isLoading}
           >
-            ⏹ 停止训练
+            {isLoading ? '⏳ 处理中...' : '⏹ 停止训练'}
           </button>
         </div>
       </div>
 
       {/* Tab Navigation */}
-      <div className="flex gap-1 mb-4 bg-surface-700/50 rounded-xl p-1.5 border border-border-dark">
+      <div className="flex gap-1 mb-4 bg-surface-700 rounded-xl p-1.5 border border-border-dark">
         {tabs.map((tab) => (
           <button
             key={tab.key}
             className={`flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 ${
               activeTab === tab.key
                 ? 'bg-primary/15 text-primary-light shadow-sm border border-primary/20'
-                : 'text-text-secondary hover:text-text-primary hover:bg-surface-600/50 border border-transparent'
+                : 'text-text-secondary hover:text-text-primary hover:bg-surface-600 border border-transparent'
             }`}
             onClick={() => setActiveTab(tab.key)}
           >

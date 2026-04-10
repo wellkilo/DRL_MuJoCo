@@ -144,5 +144,15 @@ export function ComparisonChart({
     },
   };
 
+  if (distData.length === 0 && singleData.length === 0) {
+    return (
+      <div className="h-full flex flex-col items-center justify-center text-text-muted">
+        <span className="text-3xl mb-2">📊</span>
+        <span className="text-sm">暂无对比数据</span>
+        <span className="text-xs mt-1 text-text-muted/60">分别运行分布式和单机训练后展示</span>
+      </div>
+    );
+  }
+
   return <Line data={chartData} options={options} />;
 }

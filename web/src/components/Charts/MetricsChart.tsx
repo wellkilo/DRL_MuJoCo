@@ -123,5 +123,15 @@ export function MetricsChart({
     },
   };
 
+  if (safeData.length === 0) {
+    return (
+      <div className="h-full flex flex-col items-center justify-center text-text-muted">
+        <span className="text-3xl mb-2">📊</span>
+        <span className="text-sm">暂无数据</span>
+        <span className="text-xs mt-1 text-text-muted/60">启动训练后将自动展示</span>
+      </div>
+    );
+  }
+
   return <Line data={chartData} options={options} />;
 }
