@@ -3,57 +3,78 @@
 import { useTrainingStore } from '@/stores/trainingStore';
 import { MetricsChart } from '@/components/Charts/MetricsChart';
 
-export function DistributedTab() {
+const chartCards = [
+  {
+    title: '训练速度 (SPS)',
+    metricKey: 'sps' as const,
+    color: '#6366f1',
+    label: 'Distributed SPS',
+    beginAtZero: true,
+    icon: '🚀',
+    accent: 'border-l-chart-blue',
+  },
+  {
+    title: '平均回报',
+    metricKey: 'avg_return' as const,
+    color: '#f59e0b',
+    label: 'Distributed Return',
+    beginAtZero: false,
+    icon: '📈',
+    accent: 'border-l-chart-amber',
+  },
+  {
+    title: '总损失',
+    metricKey: 'loss' as const,
+    color: '#f43f5e',
+    label: 'Distributed Loss',
+    beginAtZero: false,
+    icon: '📉',
+    accent: 'border-l-chart-rose',
+  },
+  {
+    title: 'Buffer 大小',
+    metricKey: 'buffer_size' as const,
+    color: '#10b981',
+    label: 'Distributed Buffer',
+    beginAtZero: true,
+    icon: '💾',
+    accent: 'border-l-chart-emerald',
+  },
+];
+
+interface DistributedTabProps {
+  isDark?: boolean;
+}
+
+export function DistributedTab({ isDark = true }: DistributedTabProps) {
   const { distributedMetrics } = useTrainingStore();
 
   return (
-    <div className="grid grid-cols-[repeat(auto-fit,minmax(500px,1fr))] gap-6">
-      <div className="rounded-xl p-6 shadow-sm border border-border bg-white">
-        <div className="h-[300px]">
-          <MetricsChart
-            title="训练速度 (SPS)"
-            data={distributedMetrics}
-            metricKey="sps"
-            color="#667eea"
-            label="Distributed SPS"
-            beginAtZero={true}
-          />
+    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+      {chartCards.map((card) => (
+        <div
+          key={card.metricKey}
+          className={`glass-card-hover border-l-4 ${card.accent} p-5`}
+        >
+          <div className="flex items-center gap-2 mb-4">
+            <span className="text-base">{card.icon}</span>
+            <h3 className="text-sm font-semibold text-text-primary">
+              {card.title}
+            </h3>
+          </div>
+          <div className="h-[280px]">
+            <MetricsChart
+              title={card.title}
+              data={distributedMetrics}
+              metricKey={card.metricKey}
+              color={card.color}
+              label={card.label}
+              beginAtZero={card.beginAtZero}
+              isDark={isDark}
+            />
+          </div>
         </div>
-      </div>
-      <div className="rounded-xl p-6 shadow-sm border border-border bg-white">
-        <div className="h-[300px]">
-          <MetricsChart
-            title="平均回报"
-            data={distributedMetrics}
-            metricKey="avg_return"
-            color="#f59e0b"
-            label="Distributed Return"
-          />
-        </div>
-      </div>
-      <div className="rounded-xl p-6 shadow-sm border border-border bg-white">
-        <div className="h-[300px]">
-          <MetricsChart
-            title="总损失"
-            data={distributedMetrics}
-            metricKey="loss"
-            color="#dc3545"
-            label="Distributed Loss"
-          />
-        </div>
-      </div>
-      <div className="rounded-xl p-6 shadow-sm border border-border bg-white">
-        <div className="h-[300px]">
-          <MetricsChart
-            title="Buffer 大小"
-            data={distributedMetrics}
-            metricKey="buffer_size"
-            color="#28a745"
-            label="Distributed Buffer"
-            beginAtZero={true}
-          />
-        </div>
-      </div>
+      ))}
     </div>
   );
 }
