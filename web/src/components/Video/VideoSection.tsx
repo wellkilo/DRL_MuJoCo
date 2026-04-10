@@ -17,7 +17,6 @@ export function VideoSection() {
       interval = setInterval(async () => {
         const status = await getVideoStatus();
         setVideoStatus(status);
-        // When generation completes, increment key to force video reload
         if (status.status === 'completed') {
           setVideoKey((k) => k + 1);
         }
@@ -64,82 +63,92 @@ export function VideoSection() {
       case 'error':
         return '生成失败: ' + (videoStatus.error || 'Unknown error');
       default:
-        return '视频状态: 空闲';
+        return '点击下方按钮生成训练结果视频';
     }
   };
 
-  const statusColorMap: Record<string, string> = {
-    idle: 'bg-bg-light text-text-primary',
-    generating: 'bg-[#fff3cd] text-[#856404]',
-    completed: 'bg-[#d4edda] text-[#155724]',
-    error: 'bg-[#f8d7da] text-[#721c24]',
+  const statusConfig: Record<string, { bg: string; text: string; border: string; icon: string }> = {
+    idle: { bg: 'bg-dark-600/50', text: 'text-text-secondary', border: 'border-border-dark', icon: '🎬' },
+    generating: { bg: 'bg-warning/10', text: 'text-warning-light', border: 'border-warning/20', icon: '⏳' },
+    completed: { bg: 'bg-success/10', text: 'text-success-light', border: 'border-success/20', icon: '✅' },
+    error: { bg: 'bg-danger/10', text: 'text-danger-light', border: 'border-danger/20', icon: '❌' },
   };
 
-  // Add cache-busting query parameter to force browser to reload videos
   const distSrc = `/api/videos/distributed?t=${videoKey}`;
   const singleSrc = `/api/videos/single?t=${videoKey}`;
+  const currentStatus = statusConfig[videoStatus.status] || statusConfig.idle;
 
   return (
-    <div className="bg-white border-t border-border p-8 -m-8 mt-0">
-      <h2 className="text-center text-text-primary text-xl font-bold mb-6">
-        视频演示
-      </h2>
-      <div
-        className={`text-center py-3 px-4 mb-6 font-semibold rounded-lg ${statusColorMap[videoStatus.status] || 'bg-bg-light text-text-primary'}`}
-      >
+    <div className="space-y-5">
+      {/* Status Banner */}
+      <div className={`flex items-center justify-center gap-2 py-3 px-4 rounded-xl border ${currentStatus.bg} ${currentStatus.text} ${currentStatus.border} text-sm font-medium`}>
+        <span>{currentStatus.icon}</span>
         {getVideoStatusText()}
+        {videoStatus.status === 'generating' && (
+          <span className="inline-flex">
+            <span className="animate-pulse">.</span>
+            <span className="animate-pulse [animation-delay:0.2s]">.</span>
+            <span className="animate-pulse [animation-delay:0.4s]">.</span>
+          </span>
+        )}
       </div>
-      <div className="grid grid-cols-[repeat(auto-fit,minmax(400px,1fr))] gap-8 mb-6">
-        <div className="bg-bg-light rounded-xl p-6 shadow-sm border border-border">
-          <h3 className="text-center mb-4 text-text-primary text-lg font-semibold">
+
+      {/* Video Grid */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="glass-card p-5">
+          <h3 className="flex items-center gap-2 mb-4 text-sm font-semibold text-text-primary">
+            <span className="inline-flex items-center justify-center w-6 h-6 rounded-md bg-primary/15 text-primary text-xs">⚡</span>
             分布式训练
           </h3>
           <video
             key={`dist-${videoKey}`}
             ref={videoDistributedRef}
-            className="w-full rounded-lg bg-black"
+            className="w-full rounded-lg bg-dark-900 aspect-video"
             controls
             src={distSrc}
           />
         </div>
-        <div className="bg-bg-light rounded-xl p-6 shadow-sm border border-border">
-          <h3 className="text-center mb-4 text-text-primary text-lg font-semibold">
+        <div className="glass-card p-5">
+          <h3 className="flex items-center gap-2 mb-4 text-sm font-semibold text-text-primary">
+            <span className="inline-flex items-center justify-center w-6 h-6 rounded-md bg-accent/15 text-accent text-xs">🖥️</span>
             单机训练
           </h3>
           <video
             key={`single-${videoKey}`}
             ref={videoSingleRef}
-            className="w-full rounded-lg bg-black"
+            className="w-full rounded-lg bg-dark-900 aspect-video"
             controls
             src={singleSrc}
           />
         </div>
       </div>
-      <div className="flex gap-4 justify-center flex-wrap">
+
+      {/* Controls */}
+      <div className="flex gap-3 justify-center flex-wrap">
         <button
-          className="px-8 py-3 rounded-lg text-sm font-semibold text-white bg-gradient-to-r from-[#667eea] to-[#764ba2] shadow-md transition-all hover:-translate-y-0.5 hover:shadow-[0_4px_12px_rgba(102,126,234,0.4)] disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none"
+          className="btn-primary"
           onClick={handleGenerateVideos}
           disabled={isRunning || videoStatus.status === 'generating'}
         >
-          生成对比视频
+          🎬 生成对比视频
         </button>
         <button
-          className="px-8 py-3 rounded-lg text-sm font-semibold text-white bg-gradient-to-r from-[#28a745] to-[#20c997] shadow-md transition-all hover:-translate-y-0.5 hover:shadow-[0_4px_12px_rgba(40,167,69,0.4)]"
+          className="btn-success"
           onClick={playAll}
         >
-          全部播放
+          ▶️ 全部播放
         </button>
         <button
-          className="px-8 py-3 rounded-lg text-sm font-semibold text-white bg-gradient-to-r from-[#667eea] to-[#764ba2] shadow-md transition-all hover:-translate-y-0.5 hover:shadow-[0_4px_12px_rgba(102,126,234,0.4)]"
+          className="btn-ghost"
           onClick={pauseAll}
         >
-          全部暂停
+          ⏸️ 全部暂停
         </button>
         <button
-          className="px-8 py-3 rounded-lg text-sm font-semibold text-white bg-gradient-to-r from-[#667eea] to-[#764ba2] shadow-md transition-all hover:-translate-y-0.5 hover:shadow-[0_4px_12px_rgba(102,126,234,0.4)]"
+          className="btn-ghost"
           onClick={resetAll}
         >
-          全部重置
+          🔄 全部重置
         </button>
       </div>
     </div>

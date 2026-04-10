@@ -1,3 +1,143 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
+
+@layer base {
+  :root {
+    /* Light theme */
+    --surface-900: #ffffff;
+    --surface-800: #f8fafc;
+    --surface-700: #f1f5f9;
+    --surface-600: #e2e8f0;
+    --surface-500: #cbd5e1;
+    --surface-400: #94a3b8;
+    --bg-base: #f0f2f5;
+    --bg-card: #ffffff;
+    --bg-hover: #f8fafc;
+    --text-primary: #0f172a;
+    --text-secondary: #475569;
+    --text-muted: #94a3b8;
+    --border-dark: #e2e8f0;
+    --border-light: #cbd5e1;
+  }
+
+  .dark {
+    /* Dark theme */
+    --surface-900: #0b0f1a;
+    --surface-800: #111827;
+    --surface-700: #1a2035;
+    --surface-600: #232b3e;
+    --surface-500: #2d3650;
+    --surface-400: #3a4563;
+    --bg-base: #0b0f1a;
+    --bg-card: rgba(26, 32, 53, 0.5);
+    --bg-hover: rgba(26, 32, 53, 0.8);
+    --text-primary: #f1f5f9;
+    --text-secondary: #94a3b8;
+    --text-muted: #64748b;
+    --border-dark: #1e293b;
+    --border-light: #334155;
+  }
+
+  * {
+    @apply border-border-dark;
+  }
+
+  body {
+    @apply bg-bg-base text-text-primary antialiased;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: var(--surface-800);
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: var(--surface-500);
+    border-radius: 9999px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--surface-400);
+  }
+}
+
+@layer components {
+  .glass-card {
+    background: var(--bg-card);
+    backdrop-filter: blur(8px);
+    @apply border border-border-dark rounded-xl;
+  }
+
+  .glass-card-hover {
+    @apply glass-card transition-all duration-300;
+  }
+
+  .dark .glass-card-hover {
+    @apply hover:border-primary/30 hover:shadow-lg hover:shadow-primary/5;
+  }
+
+  .glow-primary {
+    box-shadow: 0 0 15px rgba(99, 102, 241, 0.15), 0 0 30px rgba(99, 102, 241, 0.05);
+  }
+
+  .glow-success {
+    box-shadow: 0 0 15px rgba(16, 185, 129, 0.15), 0 0 30px rgba(16, 185, 129, 0.05);
+  }
+
+  .glow-danger {
+    box-shadow: 0 0 15px rgba(239, 68, 68, 0.15), 0 0 30px rgba(239, 68, 68, 0.05);
+  }
+
+  .btn-primary {
+    @apply px-6 py-2.5 rounded-lg text-sm font-semibold text-white 
+           bg-gradient-to-r from-primary to-primary-dark 
+           shadow-md shadow-primary/20 
+           transition-all duration-200 
+           hover:shadow-lg hover:shadow-primary/30 hover:-translate-y-0.5
+           active:translate-y-0 active:shadow-md
+           disabled:opacity-40 disabled:cursor-not-allowed disabled:transform-none disabled:shadow-none;
+  }
+
+  .btn-success {
+    @apply px-6 py-2.5 rounded-lg text-sm font-semibold text-white 
+           bg-gradient-to-r from-success to-emerald-600 
+           shadow-md shadow-success/20 
+           transition-all duration-200 
+           hover:shadow-lg hover:shadow-success/30 hover:-translate-y-0.5
+           active:translate-y-0 active:shadow-md
+           disabled:opacity-40 disabled:cursor-not-allowed disabled:transform-none disabled:shadow-none;
+  }
+
+  .btn-danger {
+    @apply px-6 py-2.5 rounded-lg text-sm font-semibold text-white 
+           bg-gradient-to-r from-danger to-red-600 
+           shadow-md shadow-danger/20 
+           transition-all duration-200 
+           hover:shadow-lg hover:shadow-danger/30 hover:-translate-y-0.5
+           active:translate-y-0 active:shadow-md
+           disabled:opacity-40 disabled:cursor-not-allowed disabled:transform-none disabled:shadow-none;
+  }
+
+  .btn-ghost {
+    @apply px-6 py-2.5 rounded-lg text-sm font-semibold
+           text-text-secondary border border-border-dark
+           transition-all duration-200
+           hover:text-text-primary hover:border-border-light
+           active:translate-y-0;
+    background: var(--surface-600);
+    opacity: 0.5;
+  }
+
+  .btn-ghost:hover {
+    background: var(--surface-500);
+    opacity: 1;
+  }
+}
