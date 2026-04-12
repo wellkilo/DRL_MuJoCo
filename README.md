@@ -73,18 +73,12 @@
 
 <table>
 <tr>
-<td align="center"><b>🖥️ Web UI 总界面</b></td>
 <td align="center"><b>📊 分布式训练监控</b></td>
-</tr>
-<tr>
-<td><img src="assets/web_ui.png" alt="Web UI" width="100%"></td>
-<td><img src="assets/web_ui_distributed.png" alt="Distributed" width="100%"></td>
-</tr>
-<tr>
 <td align="center"><b>📈 单机训练监控</b></td>
 <td align="center"><b>⚖️ 性能对比视图</b></td>
 </tr>
 <tr>
+<td><img src="assets/web_ui_distributed.png" alt="Distributed" width="100%"></td>
 <td><img src="assets/web_ui_single.png" alt="Single" width="100%"></td>
 <td><img src="assets/web_ui_comparison.png" alt="Comparison" width="100%"></td>
 </tr>
