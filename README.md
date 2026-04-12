@@ -137,9 +137,25 @@ DRL_MuJoCo/
 
 ### 1️⃣ 环境搭建
 
+<details>
+<summary>🐧 macOS / Linux</summary>
+
 ```bash
 bash scripts/build.sh
 ```
+
+</details>
+
+<details>
+<summary>🪟 Windows</summary>
+
+> 只需确保已安装 [Miniforge](https://github.com/conda-forge/miniforge) 或 [Miniconda](https://docs.conda.io/en/latest/miniconda.html)，脚本会自动初始化 conda 环境
+
+```cmd
+scripts\build.bat
+```
+
+</details>
 
 该脚本将自动：
 - ✅ 检查 & 创建 conda 环境 (`drl-arm`)
@@ -149,9 +165,25 @@ bash scripts/build.sh
 
 ### 2️⃣ 启动训练
 
+<details>
+<summary>🐧 macOS / Linux</summary>
+
 ```bash
 bash scripts/start.sh
 ```
+
+</details>
+
+<details>
+<summary>🪟 Windows</summary>
+
+> 脚本会自动初始化 conda，直接在 CMD 中运行即可
+
+```cmd
+scripts\start.bat
+```
+
+</details>
 
 | 选项 | 描述 |
 |:----:|------|
