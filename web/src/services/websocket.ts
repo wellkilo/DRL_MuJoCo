@@ -1,6 +1,6 @@
 import { TrainingMetrics, WebSocketMessage } from '@/types/metrics';
 
-type MetricsCallback = (distributed: TrainingMetrics[], single: TrainingMetrics[]) => void;
+type MetricsCallback = (distributed: TrainingMetrics[], single: TrainingMetrics[], env?: string) => void;
 
 export class WebSocketManager {
   private ws: WebSocket | null = null;
@@ -31,9 +31,12 @@ export class WebSocketManager {
 
     this.ws.onmessage = (event) => {
       try {
-        const msg: WebSocketMessage = JSON.parse(event.data);
+        const msg = JSON.parse(event.data);
         if (msg.type === 'metrics') {
-          this.notifySubscribers(msg.distributed || [], msg.single || []);
+          this.notifySubscribers(msg.distributed || [], msg.single || [], msg.env);
+        } else if (msg.type === 'training_stopped') {
+          // Training process crashed or ended — dispatch event so UI updates
+          window.dispatchEvent(new CustomEvent('training-stopped', { detail: { env: msg.env, returncode: msg.returncode } }));
         }
       } catch (e) {
         console.error('[WebSocket] Parse error:', e);
@@ -70,8 +73,8 @@ export class WebSocketManager {
     return () => this.subscribers.delete(callback);
   }
 
-  private notifySubscribers(distributed: TrainingMetrics[], single: TrainingMetrics[]) {
-    this.subscribers.forEach(cb => cb(distributed, single));
+  private notifySubscribers(distributed: TrainingMetrics[], single: TrainingMetrics[], env?: string) {
+    this.subscribers.forEach(cb => cb(distributed, single, env));
   }
 
   private scheduleReconnect() {

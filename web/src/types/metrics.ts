@@ -22,6 +22,7 @@ export type MetricsKey = keyof TrainingMetrics;
 
 export interface WebSocketMessage {
   type: 'metrics';
+  env: string;
   distributed: TrainingMetrics[];
   single: TrainingMetrics[];
 }
@@ -30,4 +31,12 @@ export interface VideoStatus {
   status: 'idle' | 'generating' | 'completed' | 'error';
   progress?: number;
   error?: string;
+}
+
+export type EnvKey = 'hopper' | 'walker2d' | 'halfcheetah';
+
+export interface EnvironmentInfo {
+  name: string;
+  description: string;
+  difficulty: number;
 }

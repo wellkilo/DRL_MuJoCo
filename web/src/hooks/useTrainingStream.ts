@@ -5,16 +5,19 @@ import { useTrainingStore } from '@/stores/trainingStore';
 import { wsManager } from '@/services/websocket';
 
 export function useTrainingStream() {
-  const { setDistributedMetrics, setSingleMetrics } = useTrainingStore();
+  const { activeEnv, setDistributedMetrics, setSingleMetrics } = useTrainingStore();
 
   useEffect(() => {
-    const unsubscribe = wsManager.subscribe((distributed, single) => {
-      setDistributedMetrics(distributed);
-      setSingleMetrics(single);
+    const unsubscribe = wsManager.subscribe((distributed, single, env) => {
+      // Only update metrics if the data is for the active environment
+      if (!env || env === activeEnv) {
+        setDistributedMetrics(distributed);
+        setSingleMetrics(single);
+      }
     });
 
     return () => {
       unsubscribe();
     };
-  }, [setDistributedMetrics, setSingleMetrics]);
+  }, [activeEnv, setDistributedMetrics, setSingleMetrics]);
 }

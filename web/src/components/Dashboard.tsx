@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback } from 'react';
+import { useCallback, useEffect } from 'react';
 import { useTrainingStore } from '@/stores/trainingStore';
 import { useTrainingStream } from '@/hooks/useTrainingStream';
 import { useMetricsHistory } from '@/hooks/useMetricsHistory';
@@ -15,16 +15,32 @@ import { DistributedTab } from '@/components/Tabs/DistributedTab';
 import { SingleTab } from '@/components/Tabs/SingleTab';
 import { ComparisonTab } from '@/components/Tabs/ComparisonTab';
 import { VideoSection } from '@/components/Video/VideoSection';
+import { EnvKey } from '@/types/metrics';
+
+const ENV_ICONS: Record<EnvKey, string> = {
+  hopper: '🦘',
+  walker2d: '🚶',
+  halfcheetah: '🐆',
+};
+
+const DIFFICULTY_LABELS: Record<number, string> = {
+  1: '简单',
+  2: '中等',
+  3: '较难',
+};
 
 export default function Dashboard() {
   const {
     isRunning,
     isLoading,
     error,
+    activeEnv,
     activeTab,
+    environments,
     setIsRunning,
     setIsLoading,
     setError,
+    setActiveEnv,
     setActiveTab,
     distributedMetrics,
     singleMetrics,
@@ -35,11 +51,26 @@ export default function Dashboard() {
   useMetricsHistory();
   useTrainingStream();
 
+  // Listen for training_stopped WebSocket messages (process crash/exit)
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail.env === activeEnv || !detail.env) {
+        setIsRunning(false);
+        if (detail.returncode !== 0 && detail.returncode != null) {
+          setError(`训练进程异常退出 (code: ${detail.returncode})，请检查服务器日志`);
+        }
+      }
+    };
+    window.addEventListener('training-stopped', handler);
+    return () => window.removeEventListener('training-stopped', handler);
+  }, [activeEnv, setIsRunning, setError]);
+
   const handleStartDistributed = useCallback(async () => {
     try {
       setIsLoading(true);
       setError(null);
-      const data = await startDistributedTraining();
+      const data = await startDistributedTraining(activeEnv);
       if (data.status === 'started' || data.status === 'already running') {
         setIsRunning(true);
         wsManager.connect();
@@ -51,13 +82,13 @@ export default function Dashboard() {
     } finally {
       setIsLoading(false);
     }
-  }, [setIsRunning, setIsLoading, setError]);
+  }, [activeEnv, setIsRunning, setIsLoading, setError]);
 
   const handleStartSingle = useCallback(async () => {
     try {
       setIsLoading(true);
       setError(null);
-      const data = await startSingleTraining();
+      const data = await startSingleTraining(activeEnv);
       if (data.status === 'started' || data.status === 'already running') {
         setIsRunning(true);
         wsManager.connect();
@@ -69,13 +100,13 @@ export default function Dashboard() {
     } finally {
       setIsLoading(false);
     }
-  }, [setIsRunning, setIsLoading, setError]);
+  }, [activeEnv, setIsRunning, setIsLoading, setError]);
 
   const handleStop = useCallback(async () => {
     try {
       setIsLoading(true);
       setError(null);
-      await stopTraining();
+      await stopTraining(activeEnv);
       setIsRunning(false);
       wsManager.disconnect();
     } catch (e) {
@@ -83,7 +114,7 @@ export default function Dashboard() {
     } finally {
       setIsLoading(false);
     }
-  }, [setIsRunning, setIsLoading, setError]);
+  }, [activeEnv, setIsRunning, setIsLoading, setError]);
 
   // Get latest metric values for KPI cards
   const isComparison = activeTab === 'comparison';
@@ -179,6 +210,8 @@ export default function Dashboard() {
     },
   ];
 
+  const currentEnvInfo = environments[activeEnv];
+
   return (
     <div className="mx-auto max-w-[1680px] animate-fade-in">
       {/* Header */}
@@ -238,8 +271,36 @@ export default function Dashboard() {
         </div>
       )}
 
+      {/* Environment Selector */}
+      <div className="mb-4">
+        <div className="flex gap-2 items-center flex-wrap">
+          <span className="text-text-secondary text-xs font-medium uppercase tracking-wider mr-1">环境</span>
+          {(Object.entries(environments) as [EnvKey, typeof currentEnvInfo][]).map(([key, info]) => (
+            <button
+              key={key}
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 ${
+                activeEnv === key
+                  ? 'bg-primary/15 text-primary-light border border-primary/30 shadow-sm'
+                  : 'bg-surface-700 text-text-secondary border border-border-dark hover:bg-surface-600 hover:text-text-primary'
+              }`}
+              onClick={() => setActiveEnv(key)}
+            >
+              <span>{ENV_ICONS[key]}</span>
+              <span>{info?.name || key}</span>
+              <span className={`text-xs px-1.5 py-0.5 rounded ${
+                info?.difficulty === 1 ? 'bg-success/10 text-success-light' :
+                info?.difficulty === 2 ? 'bg-warning/10 text-warning-light' :
+                'bg-danger/10 text-danger-light'
+              }`}>
+                {DIFFICULTY_LABELS[info?.difficulty || 1]}
+              </span>
+            </button>
+          ))}
+        </div>
+      </div>
+
       {/* KPI Summary Cards */}
-      <div className={`gap-3 md:gap-4 mb-6 ${isComparison ? 'grid grid-cols-2 lg:grid-cols-4' : 'grid grid-cols-2 lg:grid-cols-4'}`}>
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4 mb-6">
         {kpiCards.map((card) => (
           <div
             key={card.label}
@@ -288,14 +349,14 @@ export default function Dashboard() {
             onClick={handleStartDistributed}
             disabled={isRunning || isLoading}
           >
-            {isLoading ? '⏳ 处理中...' : '⚡ 启动分布式训练'}
+            {isLoading ? '⏳ 处理中...' : `⚡ 启动分布式训练 (${currentEnvInfo?.name || ''})`}
           </button>
           <button
             className="btn-success"
             onClick={handleStartSingle}
             disabled={isRunning || isLoading}
           >
-            {isLoading ? '⏳ 处理中...' : '🖥️ 启动单机训练'}
+            {isLoading ? '⏳ 处理中...' : `🖥️ 启动单机训练 (${currentEnvInfo?.name || ''})`}
           </button>
           <button
             className="btn-danger"
@@ -330,7 +391,7 @@ export default function Dashboard() {
         {activeTab === 'distributed' && <DistributedTab isDark={isDark} />}
         {activeTab === 'single' && <SingleTab isDark={isDark} />}
         {activeTab === 'comparison' && <ComparisonTab isDark={isDark} />}
-        {activeTab === 'video' && <VideoSection />}
+        {activeTab === 'video' && <VideoSection env={activeEnv} />}
       </div>
     </div>
   );

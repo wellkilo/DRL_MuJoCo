@@ -5,17 +5,17 @@ import { useTrainingStore } from '@/stores/trainingStore';
 import { getDistributedMetrics, getSingleMetrics } from '@/services/api';
 
 export function useMetricsHistory() {
-  const { setDistributedMetrics, setSingleMetrics } = useTrainingStore();
+  const { activeEnv, setDistributedMetrics, setSingleMetrics } = useTrainingStore();
 
   useEffect(() => {
     async function loadHistory() {
       const [dist, single] = await Promise.all([
-        getDistributedMetrics(),
-        getSingleMetrics(),
+        getDistributedMetrics(activeEnv),
+        getSingleMetrics(activeEnv),
       ]);
       setDistributedMetrics(dist);
       setSingleMetrics(single);
     }
     loadHistory();
-  }, [setDistributedMetrics, setSingleMetrics]);
+  }, [activeEnv, setDistributedMetrics, setSingleMetrics]);
 }

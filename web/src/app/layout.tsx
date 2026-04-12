@@ -4,6 +4,9 @@ import './globals.css';
 export const metadata: Metadata = {
   title: 'DRL MuJoCo — 分布式训练监控',
   description: '实时监控分布式强化学习训练过程',
+  icons: {
+    icon: '/icon.svg',
+  },
 };
 
 export default function RootLayout({

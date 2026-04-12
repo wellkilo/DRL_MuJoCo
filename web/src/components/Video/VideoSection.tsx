@@ -3,8 +3,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTrainingStore } from '@/stores/trainingStore';
 import { generateVideos, getVideoStatus } from '@/services/api';
+import { EnvKey } from '@/types/metrics';
 
-export function VideoSection() {
+interface VideoSectionProps {
+  env: EnvKey;
+}
+
+export function VideoSection({ env }: VideoSectionProps) {
   const { videoStatus, setVideoStatus, isRunning } = useTrainingStore();
   const videoDistributedRef = useRef<HTMLVideoElement>(null);
   const videoSingleRef = useRef<HTMLVideoElement>(null);
@@ -15,7 +20,7 @@ export function VideoSection() {
 
     if (videoStatus.status === 'generating') {
       interval = setInterval(async () => {
-        const status = await getVideoStatus();
+        const status = await getVideoStatus(env);
         setVideoStatus(status);
         if (status.status === 'completed') {
           setVideoKey((k) => k + 1);
@@ -26,10 +31,10 @@ export function VideoSection() {
     return () => {
       if (interval) clearInterval(interval);
     };
-  }, [videoStatus.status, setVideoStatus]);
+  }, [videoStatus.status, setVideoStatus, env]);
 
   const handleGenerateVideos = async () => {
-    await generateVideos();
+    await generateVideos(env);
     setVideoStatus({ status: 'generating' });
   };
 
@@ -68,14 +73,14 @@ export function VideoSection() {
   };
 
   const statusConfig: Record<string, { bg: string; text: string; border: string; icon: string }> = {
-    idle: { bg: 'bg-dark-600/50', text: 'text-text-secondary', border: 'border-border-dark', icon: '🎬' },
+    idle: { bg: 'bg-surface-600', text: 'text-text-secondary', border: 'border-border-dark', icon: '🎬' },
     generating: { bg: 'bg-warning/10', text: 'text-warning-light', border: 'border-warning/20', icon: '⏳' },
     completed: { bg: 'bg-success/10', text: 'text-success-light', border: 'border-success/20', icon: '✅' },
     error: { bg: 'bg-danger/10', text: 'text-danger-light', border: 'border-danger/20', icon: '❌' },
   };
 
-  const distSrc = `/api/videos/distributed?t=${videoKey}`;
-  const singleSrc = `/api/videos/single?t=${videoKey}`;
+  const distSrc = `/api/videos/distributed?env=${env}&t=${videoKey}`;
+  const singleSrc = `/api/videos/single?env=${env}&t=${videoKey}`;
   const currentStatus = statusConfig[videoStatus.status] || statusConfig.idle;
 
   return (
@@ -103,7 +108,7 @@ export function VideoSection() {
           <video
             key={`dist-${videoKey}`}
             ref={videoDistributedRef}
-            className="w-full rounded-lg bg-dark-900 aspect-video"
+            className="w-full rounded-lg bg-surface-900 aspect-video"
             controls
             src={distSrc}
           />
@@ -116,7 +121,7 @@ export function VideoSection() {
           <video
             key={`single-${videoKey}`}
             ref={videoSingleRef}
-            className="w-full rounded-lg bg-dark-900 aspect-video"
+            className="w-full rounded-lg bg-surface-900 aspect-video"
             controls
             src={singleSrc}
           />

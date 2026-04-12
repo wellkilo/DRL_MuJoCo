@@ -9,6 +9,9 @@ const nextConfig: NextConfig = {
   images: {
     unoptimized: true,
   },
+  // Disable devtools to avoid Next.js 15.3+ bug:
+  // "Could not find the module segment-explorer-node.js#SegmentViewNode in the React Client Manifest"
+  devtools: false,
   outputFileTracingRoot: path.join(__dirname, '..'),
   // These rewrites work with `next dev` but are ignored in static export.
   // In production, FastAPI serves both the static files and the API.
