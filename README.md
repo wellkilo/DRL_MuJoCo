@@ -149,11 +149,16 @@ bash scripts/build.sh
 <details>
 <summary>🪟 Windows</summary>
 
-> 只需确保已安装 [Miniforge](https://github.com/conda-forge/miniforge) 或 [Miniconda](https://docs.conda.io/en/latest/miniconda.html)，脚本会自动初始化 conda 环境
+> 只需确保已安装 [Miniforge](https://github.com/conda-forge/miniforge)（推荐）或 [Miniconda](https://docs.conda.io/en/latest/miniconda.html)，脚本会自动初始化 conda 环境
 
 ```cmd
 scripts\build.bat
 ```
+
+> **Windows 额外注意事项：**
+> - MuJoCo 需要 [Visual C++ Redistributable](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist)，一般 Windows 10/11 已预装
+> - 如需构建 Rust Buffer，需安装 [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/)（勾选 "C++ build tools"）和 [Rust](https://www.rust-lang.org/tools/install)
+> - Ray 在 Windows 上支持单机多进程分布式训练（本项目模式），但不支持多节点集群
 
 </details>
 
