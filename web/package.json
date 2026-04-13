@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "echo 'Use FastAPI backend (python web/server.py) or Next.js dev mode (npm run dev)' && exit 0"
+    "start": "echo \"Use FastAPI backend (python web/server.py) or Next.js dev mode (npm run dev)\""
   },
   "dependencies": {
     "chart.js": "^4.4.0",

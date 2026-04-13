@@ -1,4 +1,5 @@
 ray
+setuptools
 torch
 numpy<2
 gymnasium==1.1.1
