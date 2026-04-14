@@ -10,7 +10,8 @@ interface VideoSectionProps {
 }
 
 export function VideoSection({ env }: VideoSectionProps) {
-  const { videoStatus, setVideoStatus, isRunning } = useTrainingStore();
+  const { videoStatus, setVideoStatus, runningEnvs } = useTrainingStore();
+  const isRunning = runningEnvs[env] ?? false;
   const videoDistributedRef = useRef<HTMLVideoElement>(null);
   const videoSingleRef = useRef<HTMLVideoElement>(null);
   const [videoKey, setVideoKey] = useState(0);

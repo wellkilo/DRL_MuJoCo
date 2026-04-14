@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { TrainingMetrics, VideoStatus, EnvKey, EnvironmentInfo } from '@/types/metrics';
 
 interface TrainingState {
-  isRunning: boolean;
+  runningEnvs: Record<EnvKey, boolean>;
   isLoading: boolean;
   error: string | null;
   activeEnv: EnvKey;
@@ -12,7 +12,7 @@ interface TrainingState {
   distributedMetrics: TrainingMetrics[];
   singleMetrics: TrainingMetrics[];
   videoStatus: VideoStatus;
-  setIsRunning: (running: boolean) => void;
+  setEnvRunning: (env: EnvKey, running: boolean) => void;
   setIsLoading: (loading: boolean) => void;
   setError: (error: string | null) => void;
   setActiveEnv: (env: EnvKey) => void;
@@ -24,7 +24,7 @@ interface TrainingState {
 }
 
 export const useTrainingStore = create<TrainingState>((set) => ({
-  isRunning: false,
+  runningEnvs: { hopper: false, walker2d: false, halfcheetah: false },
   isLoading: false,
   error: null,
   activeEnv: 'hopper',
@@ -37,7 +37,10 @@ export const useTrainingStore = create<TrainingState>((set) => ({
     walker2d: { name: 'Walker2d-v5', description: '双腿行走机器人', difficulty: 2 },
     halfcheetah: { name: 'HalfCheetah-v5', description: '半猎豹奔跑机器人', difficulty: 3 },
   },
-  setIsRunning: (running) => set({ isRunning: running }),
+  setEnvRunning: (env, running) =>
+    set((state) => ({
+      runningEnvs: { ...state.runningEnvs, [env]: running },
+    })),
   setIsLoading: (loading) => set({ isLoading: loading }),
   setError: (error) => set({ error }),
   setActiveEnv: (env) => set({ activeEnv: env, distributedMetrics: [], singleMetrics: [] }),

@@ -260,6 +260,19 @@ async def stop_training(env: Optional[str] = Query(default=None)) -> Dict[str, A
     return {"status": "stopped", "environments": stopped}
 
 
+@app.get("/api/training/status")
+async def get_training_status(env: Optional[str] = Query(default=None)) -> Dict[str, Any]:
+    """查询训练进程状态，前端可按环境查询后端真实的训练进程状态"""
+    if env:
+        task = training_tasks.get(env)
+        return {"env": env, "running": task is not None and task.returncode is None}
+    statuses = {}
+    for e in ENVIRONMENTS:
+        task = training_tasks.get(e)
+        statuses[e] = task is not None and task.returncode is None
+    return {"statuses": statuses}
+
+
 # ==================== 视频生成 API ====================
 
 def _create_video_script(env: str) -> Path:
