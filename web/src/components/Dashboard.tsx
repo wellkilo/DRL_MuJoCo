@@ -31,13 +31,13 @@ const DIFFICULTY_LABELS: Record<number, string> = {
 
 export default function Dashboard() {
   const {
-    isRunning,
+    runningEnvs,
     isLoading,
     error,
     activeEnv,
     activeTab,
     environments,
-    setIsRunning,
+    setEnvRunning,
     setIsLoading,
     setError,
     setActiveEnv,
@@ -45,6 +45,9 @@ export default function Dashboard() {
     distributedMetrics,
     singleMetrics,
   } = useTrainingStore();
+
+  // Derive per-env running state
+  const isRunning = runningEnvs[activeEnv] ?? false;
 
   const { isDark, toggleTheme } = useTheme();
 
@@ -55,16 +58,23 @@ export default function Dashboard() {
   useEffect(() => {
     const handler = (e: Event) => {
       const detail = (e as CustomEvent).detail;
-      if (detail.env === activeEnv || !detail.env) {
-        setIsRunning(false);
-        if (detail.returncode !== 0 && detail.returncode != null) {
-          setError(`训练进程异常退出 (code: ${detail.returncode})，请检查服务器日志`);
-        }
+      const stoppedEnv = detail.env as EnvKey | undefined;
+      if (stoppedEnv) {
+        // Precisely update the stopped env, independent of activeEnv
+        setEnvRunning(stoppedEnv, false);
+      } else {
+        // No env specified — reset all
+        setEnvRunning('hopper', false);
+        setEnvRunning('walker2d', false);
+        setEnvRunning('halfcheetah', false);
+      }
+      if (detail.returncode !== 0 && detail.returncode != null) {
+        setError(`训练进程异常退出 (code: ${detail.returncode})，请检查服务器日志`);
       }
     };
     window.addEventListener('training-stopped', handler);
     return () => window.removeEventListener('training-stopped', handler);
-  }, [activeEnv, setIsRunning, setError]);
+  }, [setEnvRunning, setError]);
 
   const handleStartDistributed = useCallback(async () => {
     try {
@@ -72,7 +82,7 @@ export default function Dashboard() {
       setError(null);
       const data = await startDistributedTraining(activeEnv);
       if (data.status === 'started' || data.status === 'already running') {
-        setIsRunning(true);
+        setEnvRunning(activeEnv, true);
         wsManager.connect();
       } else {
         setError(`启动分布式训练失败: ${data.status}`);
@@ -82,7 +92,7 @@ export default function Dashboard() {
     } finally {
       setIsLoading(false);
     }
-  }, [activeEnv, setIsRunning, setIsLoading, setError]);
+  }, [activeEnv, setEnvRunning, setIsLoading, setError]);
 
   const handleStartSingle = useCallback(async () => {
     try {
@@ -90,7 +100,7 @@ export default function Dashboard() {
       setError(null);
       const data = await startSingleTraining(activeEnv);
       if (data.status === 'started' || data.status === 'already running') {
-        setIsRunning(true);
+        setEnvRunning(activeEnv, true);
         wsManager.connect();
       } else {
         setError(`启动单机训练失败: ${data.status}`);
@@ -100,21 +110,21 @@ export default function Dashboard() {
     } finally {
       setIsLoading(false);
     }
-  }, [activeEnv, setIsRunning, setIsLoading, setError]);
+  }, [activeEnv, setEnvRunning, setIsLoading, setError]);
 
   const handleStop = useCallback(async () => {
     try {
       setIsLoading(true);
       setError(null);
       await stopTraining(activeEnv);
-      setIsRunning(false);
+      setEnvRunning(activeEnv, false);
       wsManager.disconnect();
     } catch (e) {
       setError(`停止训练失败: ${e instanceof Error ? e.message : '未知错误'}`);
     } finally {
       setIsLoading(false);
     }
-  }, [activeEnv, setIsRunning, setIsLoading, setError]);
+  }, [activeEnv, setEnvRunning, setIsLoading, setError]);
 
   // Get latest metric values for KPI cards
   const isComparison = activeTab === 'comparison';
@@ -285,6 +295,14 @@ export default function Dashboard() {
               }`}
               onClick={() => setActiveEnv(key)}
             >
+              <span className="relative flex h-2 w-2">
+                {runningEnvs[key] && (
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-success opacity-75" />
+                )}
+                <span className={`relative inline-flex rounded-full h-2 w-2 ${
+                  runningEnvs[key] ? 'bg-success' : 'bg-text-muted'
+                }`} />
+              </span>
               <span>{ENV_ICONS[key]}</span>
               <span>{info?.name || key}</span>
               <span className={`text-xs px-1.5 py-0.5 rounded ${
