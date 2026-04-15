@@ -23,7 +23,7 @@ import torch
 
 from drl.config_loader import load_config
 from drl.logging_utils import log_event
-from drl.ray_components import Learner, MuJoCoActor, ParameterServer, ReplayBuffer
+from drl.ray_components import Learner, MuJoCoActor, ParameterServer, ReplayBuffer, _merge_obs_rms_states
 
 # 全局变量用于信号处理
 global_state: dict[str, Any] = {}
@@ -43,11 +43,19 @@ def save_model_and_exit(signum: int, frame: Any) -> None:
             final_state = ray.get(global_state["learner"].get_state.remote())
             print(f"[Main] Got model state, saving...", flush=True)
             
-            # 保存模型
+            # 获取 obs_rms 统计量
+            obs_rms_state = None
+            if "param_server" in global_state:
+                try:
+                    obs_rms_state = ray.get(global_state["param_server"].get_obs_rms.remote())
+                except Exception:
+                    pass
+            
+            # 保存模型（包含 obs_rms 统计量）
             config_name = Path(global_state["config_path"]).stem
             model_path = global_state["OUTPUT_DIR"] / f"model_{config_name}.pt"
             print(f"[Main] Saving to: {model_path}", flush=True)
-            torch.save(final_state, model_path)
+            torch.save({"actor": final_state, "obs_rms_state": obs_rms_state}, model_path)
             print(f"[Main] Model saved to {model_path}", flush=True)
             
             # 打印最佳模型信息
@@ -87,7 +95,14 @@ def main() -> None:
     config_path = "config/config.yaml"
     if len(sys.argv) > 1:
         config_path = sys.argv[1]
-    cfg = load_config(config_path)
+    
+    try:
+        cfg = load_config(config_path)
+    except Exception as e:
+        print(f"[Main] FATAL: Failed to load config from '{config_path}': {e}", flush=True)
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
 
     # 定义输出目录
     OUTPUT_DIR = Path("output")
@@ -111,19 +126,33 @@ def main() -> None:
     # 导入 Gymnasium 并初始化环境以获取观测和动作空间维度
     import gymnasium as gym
 
-    env = gym.make(cfg.env_name)
-    obs_dim = int(np.asarray(env.observation_space.shape[0]))
-    action_dim = int(np.asarray(env.action_space.shape[0]))
-    env.close()
+    try:
+        env = gym.make(cfg.env_name)
+        obs_dim = int(np.asarray(env.observation_space.shape[0]))
+        action_dim = int(np.asarray(env.action_space.shape[0]))
+        env.close()
+    except Exception as e:
+        print(f"[Main] FATAL: Failed to create environment '{cfg.env_name}': {e}", flush=True)
+        print(f"[Main] Make sure MuJoCo is properly installed. Try: pip install mujoco", flush=True)
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
 
     # 初始化 Ray 集群（支持本地或分布式集群）
-    ray.init(address=cfg.ray_address) if cfg.ray_address else ray.init()
+    try:
+        ray.init(address=cfg.ray_address) if cfg.ray_address else ray.init()
+    except Exception as e:
+        print(f"[Main] FATAL: Failed to initialize Ray: {e}", flush=True)
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
 
     # 创建分布式核心组件
     # 1. 经验回放缓冲区 - 存储所有 Actor 采集的经验
     replay_buffer = ReplayBuffer.remote(cfg.replay_buffer_capacity)
     # 2. 参数服务器 - 存储最新模型参数，供所有 Actor 拉取
     param_server = ParameterServer.remote()
+    global_state["param_server"] = param_server
     # 3. 学习器 - 负责从 ReplayBuffer 采样并更新模型
     learner = Learner.remote(obs_dim, action_dim, replay_buffer, cfg.__dict__)
     
@@ -138,7 +167,7 @@ def main() -> None:
     print(f"[Main] Saving initial model...", flush=True)
     config_name = Path(config_path).stem
     model_path = OUTPUT_DIR / f"model_{config_name}.pt"
-    torch.save(init_state, model_path)
+    torch.save({"actor": init_state, "obs_rms_state": None}, model_path)
     print(f"[Main] Initial model saved to {model_path}", flush=True)
 
     # 创建多个 Actor 并行采集经验
@@ -147,10 +176,13 @@ def main() -> None:
     # 从 ParameterServer 获取初始参数
     init_params = ray.get(param_server.get.remote())
 
+    # 获取初始观测归一化统计量（首次为 None）
+    init_obs_rms = ray.get(param_server.get_obs_rms.remote())
+
     # 启动所有 Actor 进行第一次采样
     # actor_tasks 字典维护：Ray任务ID -> Actor句柄 的映射
     actor_tasks: dict[ray.ObjectRef, ray.actor.ActorHandle] = {
-        actor.sample.remote(init_params, cfg.rollout_length, cfg.gamma, cfg.gae_lambda): actor for actor in actors
+        actor.sample.remote(init_params, cfg.rollout_length, cfg.gamma, cfg.gae_lambda, init_obs_rms): actor for actor in actors
     }
 
     # 准备训练指标输出文件
@@ -207,6 +239,9 @@ def main() -> None:
         # 批量获取所有结果（减少通信开销）
         results = ray.get(done_ids)
         
+        # 收集所有 Actor 的 obs_rms 统计量
+        all_obs_rms_states: list[dict] = []
+
         # 处理所有已完成的采样任务
         for done_id, (traj, stats) in zip(done_ids, results):
             actor = actor_tasks.pop(done_id)
@@ -214,6 +249,10 @@ def main() -> None:
             # 将轨迹存入数据存储
             if traj:
                 ray.get(replay_buffer.add.remote(traj))
+
+            # 收集 Actor 的观测归一化统计量
+            if "obs_rms_state" in stats:
+                all_obs_rms_states.append(stats["obs_rms_state"])
 
             # 累计统计信息
             traj_len = len(traj)
@@ -227,7 +266,15 @@ def main() -> None:
             if ep_count > 0:
                 recent_returns.append(ep_return_sum / ep_count)
                 
-            log_event("actor_sample", {"step": train_step, **stats, "traj_len": traj_len})
+            # 排除 obs_rms_state（包含 numpy 数组，不可 JSON 序列化）
+            log_stats = {k: v for k, v in stats.items() if k != "obs_rms_state"}
+            log_event("actor_sample", {"step": train_step, **log_stats, "traj_len": traj_len})
+
+        # 合并所有 Actor 的 obs_rms 统计量并同步到 ParameterServer
+        if all_obs_rms_states:
+            merged_obs_rms = _merge_obs_rms_states(all_obs_rms_states)
+            if merged_obs_rms is not None:
+                ray.get(param_server.update_obs_rms.remote(merged_obs_rms))
 
         # 阶段2：进行一次完整的 on-policy 学习更新
         size = ray.get(replay_buffer.size.remote())
@@ -281,13 +328,14 @@ def main() -> None:
         )
         metrics_file.flush()  # 立即写入文件
         
-        # 定期保存模型
+        # 定期保存模型（包含 obs_rms 统计量）
         print(f"[Main] Saving model at train step {train_step}...", flush=True)
         try:
             current_state = ray.get(learner.get_state.remote())
+            current_obs_rms_for_save = ray.get(param_server.get_obs_rms.remote())
             config_name = Path(config_path).stem
             model_path = OUTPUT_DIR / f"model_{config_name}.pt"
-            torch.save(current_state, model_path)
+            torch.save({"actor": current_state, "obs_rms_state": current_obs_rms_for_save}, model_path)
             print(f"[Main] Model saved to {model_path}", flush=True)
             
             # 检查是否为最佳模型，如果是则保存
@@ -295,25 +343,28 @@ def main() -> None:
                 best_avg_return = avg_return
                 global_state["best_avg_return"] = best_avg_return
                 best_model_path = OUTPUT_DIR / f"model_{config_name}_best.pt"
-                torch.save(current_state, best_model_path)
+                torch.save({"actor": current_state, "obs_rms_state": current_obs_rms_for_save}, best_model_path)
                 print(f"[Main] Best model saved to {best_model_path} with avg_return {best_avg_return:.2f}", flush=True)
         except Exception as e:
             print(f"[Main] Error saving model: {e}", flush=True)
         
         # 阶段3：让所有 Actor 使用最新参数继续采样（为下一轮准备）
+        # 获取最新的 obs_rms 统计量，传给所有 Actor
+        current_obs_rms = ray.get(param_server.get_obs_rms.remote())
         actor_tasks = {
-            actor.sample.remote(current_params, cfg.rollout_length, cfg.gamma, cfg.gae_lambda): actor 
+            actor.sample.remote(current_params, cfg.rollout_length, cfg.gamma, cfg.gae_lambda, current_obs_rms): actor
             for actor in actors
         }
 
         # 避免过度占用 CPU
         time.sleep(0.01)
 
-    # 训练结束，保存模型
+    # 训练结束，保存模型（包含 obs_rms 统计量）
     final_state = ray.get(learner.get_state.remote())
+    final_obs_rms = ray.get(param_server.get_obs_rms.remote())
     config_name = Path(config_path).stem
     model_path = OUTPUT_DIR / f"model_{config_name}.pt"
-    torch.save(final_state, model_path)
+    torch.save({"actor": final_state, "obs_rms_state": final_obs_rms}, model_path)
     print(f"Model saved to {model_path}")
     print(f"Best avg return during training: {best_avg_return:.2f}")
     best_model_path = OUTPUT_DIR / f"model_{config_name}_best.pt"
@@ -325,4 +376,10 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        print(f"[Main] FATAL: Unhandled exception: {e}", flush=True)
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)

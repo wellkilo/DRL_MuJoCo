@@ -36,7 +36,7 @@ export class WebSocketManager {
           this.notifySubscribers(msg.distributed || [], msg.single || [], msg.env);
         } else if (msg.type === 'training_stopped') {
           // Training process crashed or ended — dispatch event so UI updates
-          window.dispatchEvent(new CustomEvent('training-stopped', { detail: { env: msg.env, returncode: msg.returncode } }));
+          window.dispatchEvent(new CustomEvent('training-stopped', { detail: { env: msg.env, returncode: msg.returncode, error_detail: msg.error_detail || '' } }));
         }
       } catch (e) {
         console.error('[WebSocket] Parse error:', e);

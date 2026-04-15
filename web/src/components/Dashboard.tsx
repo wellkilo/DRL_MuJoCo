@@ -69,7 +69,14 @@ export default function Dashboard() {
         setEnvRunning('halfcheetah', false);
       }
       if (detail.returncode !== 0 && detail.returncode != null) {
-        setError(`训练进程异常退出 (code: ${detail.returncode})，请检查服务器日志`);
+        const errorDetail = detail.error_detail as string | undefined;
+        if (errorDetail && errorDetail.trim()) {
+          // 截取关键错误信息（最多5行），避免信息过长
+          const errorLines = errorDetail.trim().split('\n').slice(-5).join('\n');
+          setError(`训练进程异常退出 (code: ${detail.returncode})：\n${errorLines}`);
+        } else {
+          setError(`训练进程异常退出 (code: ${detail.returncode})，请检查服务器日志`);
+        }
       }
     };
     window.addEventListener('training-stopped', handler);
@@ -269,12 +276,12 @@ export default function Dashboard() {
 
       {/* Error Banner */}
       {error && (
-        <div className="mb-4 flex items-center gap-3 px-4 py-3 rounded-xl bg-danger/10 border border-danger/20 text-danger-light text-sm animate-slide-up">
-          <span>❌</span>
-          <span className="flex-1">{error}</span>
+        <div className="mb-4 flex items-start gap-3 px-4 py-3 rounded-xl bg-danger/10 border border-danger/20 text-danger-light text-sm animate-slide-up">
+          <span className="mt-0.5">❌</span>
+          <pre className="flex-1 whitespace-pre-wrap break-all font-mono text-xs leading-relaxed">{error}</pre>
           <button
             onClick={() => setError(null)}
-            className="text-danger-light/60 hover:text-danger-light transition-colors text-lg leading-none"
+            className="text-danger-light/60 hover:text-danger-light transition-colors text-lg leading-none shrink-0"
           >
             ×
           </button>

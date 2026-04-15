@@ -86,6 +86,7 @@ active_env: str = "hopper"  # 当前活跃环境
 clients: list[WebSocket] = []  # WebSocket 客户端列表
 video_generation_processes: dict[str, asyncio.subprocess.Process] = {}  # 每个环境的视频生成进程
 video_generation_status: dict[str, dict[str, Any]] = {}  # 每个环境的视频生成状态
+training_output: dict[str, list[str]] = {}  # 每个环境的最近训练输出（用于错误诊断）
 
 
 def get_env_config(env: str) -> dict:
@@ -189,6 +190,7 @@ async def start_training_distributed(env: str = Query("hopper")) -> dict[str, st
     active_env = env
     config_path = REPO_ROOT / cfg["distributed_config"]
 
+    training_output[env] = []  # 初始化输出缓冲区
     training_tasks[env] = await asyncio.create_subprocess_exec(
         sys.executable, str(REPO_ROOT / "main.py"), str(config_path),
         stdout=asyncio.subprocess.PIPE,
@@ -216,6 +218,7 @@ async def start_training_single(env: str = Query("hopper")) -> dict[str, str]:
     active_env = env
     config_path = REPO_ROOT / cfg["single_config"]
 
+    training_output[env] = []  # 初始化输出缓冲区
     training_tasks[env] = await asyncio.create_subprocess_exec(
         sys.executable, str(REPO_ROOT / "main.py"), str(config_path),
         stdout=asyncio.subprocess.PIPE,
@@ -273,6 +276,15 @@ async def get_training_status(env: Optional[str] = Query(default=None)) -> Dict[
     return {"statuses": statuses}
 
 
+@app.get("/api/training/logs")
+async def get_training_logs(env: str = Query("hopper"), lines: int = Query(50)) -> Dict[str, Any]:
+    """获取训练进程的最近日志输出，用于错误诊断"""
+    output_lines = training_output.get(env, [])
+    # 返回最后 N 行
+    recent = output_lines[-lines:] if output_lines else []
+    return {"env": env, "lines": recent, "total": len(output_lines)}
+
+
 # ==================== 视频生成 API ====================
 
 def _create_video_script(env: str) -> Path:
@@ -313,16 +325,22 @@ async def _monitor_video_process(env: str, process: asyncio.subprocess.Process) 
     """监控视频生成进程"""
     try:
         video_generation_status[env] = {"status": "generating", "progress": 0}
-        while process.returncode is None:
-            await asyncio.sleep(0.5)
-        stdout, stderr = await process.communicate()
+        _, stderr = await process.communicate()
         if process.returncode == 0:
             video_generation_status[env] = {"status": "completed", "progress": 100}
             print(f"[Server] Video generation for {env} completed!", flush=True)
         else:
-            error_msg = stderr.decode() if stderr else "Unknown error"
+            error_msg = (stderr or b"").decode(errors="replace").strip()
+            if not error_msg:
+                error_msg = f"Process exited with code {process.returncode}"
             video_generation_status[env] = {"status": "error", "error": error_msg}
             print(f"[Server] Video generation for {env} failed: {error_msg}", flush=True)
+    except BrokenPipeError:
+        # BrokenPipeError is harmless — process output pipe closed before we read it
+        if process.returncode == 0:
+            video_generation_status[env] = {"status": "completed", "progress": 100}
+        else:
+            video_generation_status[env] = {"status": "error", "error": "BrokenPipeError"}
     except Exception as e:
         video_generation_status[env] = {"status": "error", "error": str(e)}
 
@@ -346,7 +364,7 @@ async def generate_videos(env: str = Query("hopper")) -> dict[str, Any]:
 
     video_generation_processes[env] = await asyncio.create_subprocess_exec(
         sys.executable, str(script_path),
-        stdout=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.DEVNULL,
         stderr=asyncio.subprocess.PIPE,
         cwd=str(REPO_ROOT)
     )
@@ -384,7 +402,7 @@ async def get_single_video(env: str = Query("hopper")) -> Any:
 # ==================== 监控任务 ====================
 
 async def monitor_training_output(env: str) -> None:
-    """监控训练进程的输出"""
+    """监控训练进程的输出，并保存最近输出用于错误诊断"""
     task = training_tasks.get(env)
     if not task or not task.stdout:
         return
@@ -394,9 +412,38 @@ async def monitor_training_output(env: str) -> None:
             line = await task.stdout.readline()
             if not line:
                 break
-            print(f"[{env}] {line.decode().rstrip()}", flush=True)
+            decoded_line = line.decode().rstrip()
+            print(f"[{env}] {decoded_line}", flush=True)
+            # 保存最近的输出行（保留最后200行用于错误诊断）
+            if env not in training_output:
+                training_output[env] = []
+            training_output[env].append(decoded_line)
+            if len(training_output[env]) > 200:
+                training_output[env] = training_output[env][-200:]
     except Exception as e:
         print(f"[Training Output] Error for {env}: {e}", flush=True)
+
+
+def _extract_error_lines(output_lines: list[str], max_lines: int = 30) -> str:
+    """从训练输出中提取错误信息，优先提取 Traceback 及其后续行"""
+    if not output_lines:
+        return ""
+    
+    # 查找最后一个 Traceback 的位置
+    traceback_idx = -1
+    for i in range(len(output_lines) - 1, -1, -1):
+        if "Traceback" in output_lines[i] or "Error:" in output_lines[i] or "Exception:" in output_lines[i]:
+            traceback_idx = i
+            break
+    
+    if traceback_idx >= 0:
+        # 从 Traceback 开始取到末尾（或最多 max_lines 行）
+        error_lines = output_lines[traceback_idx:traceback_idx + max_lines]
+    else:
+        # 没有 Traceback，取最后 max_lines 行
+        error_lines = output_lines[-max_lines:]
+    
+    return "\n".join(error_lines)
 
 
 async def monitor_training(env: str) -> None:
@@ -410,14 +457,26 @@ async def monitor_training(env: str) -> None:
         # Check if process is still running
         if task.returncode is not None:
             print(f"[Monitor] Training for {env} ended with returncode {task.returncode}.", flush=True)
+            
+            # 提取错误信息
+            error_detail = ""
+            if task.returncode != 0:
+                output_lines = training_output.get(env, [])
+                error_detail = _extract_error_lines(output_lines)
+                if error_detail:
+                    print(f"[Monitor] Error detail for {env}:\n{error_detail}", flush=True)
+            
             # Notify all clients that training stopped
             for client in clients.copy():
                 try:
-                    await client.send_text(json.dumps({
+                    msg = {
                         "type": "training_stopped",
                         "env": env,
                         "returncode": task.returncode,
-                    }))
+                    }
+                    if error_detail:
+                        msg["error_detail"] = error_detail
+                    await client.send_text(json.dumps(msg))
                 except Exception:
                     if client in clients:
                         clients.remove(client)
