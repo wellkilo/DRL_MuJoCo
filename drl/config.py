@@ -52,3 +52,4 @@ class Config:
     max_grad_norm: float = 0.5       # 梯度裁剪阈值（防止梯度爆炸）
     target_kl: float = 0.015         # KL 散度早停阈值（防止过度更新）
     lr_schedule: str = "linear"       # 学习率调度：'constant' 或 'linear'
+    clip_ratio_value: float = 0.2    # 价值函数裁剪比率（防止价值预测剧变导致 GAE 失真）

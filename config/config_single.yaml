@@ -21,4 +21,5 @@ use_mps: true
 max_grad_norm: 1.0
 target_kl: 0.02
 lr_schedule: "linear"
+clip_ratio_value: 0.2
 ray_address:

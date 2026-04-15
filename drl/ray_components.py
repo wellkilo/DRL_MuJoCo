@@ -1,5 +1,11 @@
 # DRL Ray 分布式组件实现
 # 包含分布式训练的核心组件：参数服务器、经验回放池、Actor 和 Learner
+#
+# 第二轮优化：
+# - 新增观测值归一化（Observation Normalization），解决 MuJoCo 环境观测值量纲差异大的问题
+# - 新增 Value Function Clipping，防止价值函数剧变导致 GAE 优势估计失真
+# - 修复自适应熵机制阈值（min_entropy 0.5→0.3, 系数 3.0→2.0）
+# - 参数服务器新增观测归一化统计量同步功能
 
 from __future__ import annotations
 
@@ -11,6 +17,49 @@ import ray
 import torch
 
 from drl.models import ActorCritic
+from drl.running_mean_std import RunningMeanStd
+
+
+def _merge_obs_rms_states(states: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """
+    合并多个 Actor 的观测归一化统计量
+    
+    使用 Welford 并行合并公式，将多个独立采集的统计量合并为全局统计量。
+    这确保所有 Actor 使用一致的归一化参数。
+    
+    Args:
+        states: 各 Actor 的 obs_rms 状态列表
+    
+    Returns:
+        合并后的 obs_rms 状态字典，或 None（如果输入为空）
+    """
+    if not states:
+        return None
+    if len(states) == 1:
+        return states[0]
+
+    # 使用第一个状态作为基础，逐个合并
+    merged = RunningMeanStd(shape=states[0]["mean"].shape)
+    merged.set_state(states[0])
+
+    for state in states[1:]:
+        other = RunningMeanStd(shape=state["mean"].shape)
+        other.set_state(state)
+
+        # Welford 并行合并公式
+        a_count = merged.count
+        b_count = other.count
+        total_count = a_count + b_count
+        delta = other.mean - merged.mean
+
+        merged.mean = merged.mean + delta * b_count / total_count
+        m_a = merged.var * a_count
+        m_b = other.var * b_count
+        m2 = m_a + m_b + np.square(delta) * a_count * b_count / total_count
+        merged.var = m2 / total_count
+        merged.count = total_count
+
+    return merged.get_state()
 
 
 @ray.remote
@@ -19,11 +68,13 @@ class ParameterServer:
     参数服务器（Parameter Server）
     功能：
     1. 存储最新的模型参数
-    2. 供所有 Actor 和 Learner 异步读写
-    3. 实现参数在分布式节点间的同步
+    2. 存储观测归一化统计量（obs_rms）
+    3. 供所有 Actor 和 Learner 异步读写
+    4. 实现参数在分布式节点间的同步
     """
     def __init__(self) -> None:
         self._state_dict: dict[str, Any] | None = None
+        self._obs_rms_state: dict[str, Any] | None = None
 
     def get(self) -> dict[str, Any] | None:
         """获取当前存储的模型参数"""
@@ -32,6 +83,14 @@ class ParameterServer:
     def set(self, state_dict: dict[str, Any]) -> None:
         """更新存储的模型参数"""
         self._state_dict = state_dict
+
+    def update_obs_rms(self, obs_rms_state: dict[str, Any]) -> None:
+        """更新观测归一化统计量"""
+        self._obs_rms_state = obs_rms_state
+
+    def get_obs_rms(self) -> dict[str, Any] | None:
+        """获取观测归一化统计量"""
+        return self._obs_rms_state
 
 
 @ray.remote
@@ -69,7 +128,7 @@ def _to_tensor(batch: list[dict[str, Any]], device: torch.device) -> dict[str, t
     """
     将批量的经验数据转换为 PyTorch 张量
     Args:
-        batch: 经验数据列表，每条数据包含 obs, act, logp, adv, ret
+        batch: 经验数据列表，每条数据包含 obs, act, logp, adv, ret, (可选) value
         device: 目标设备（cuda/mps/cpu）
     Returns:
         字典形式的张量批数据
@@ -79,7 +138,17 @@ def _to_tensor(batch: list[dict[str, Any]], device: torch.device) -> dict[str, t
     logp = torch.as_tensor(np.array([b["logp"] for b in batch]), device=device, dtype=torch.float32)
     adv = torch.as_tensor(np.array([b["adv"] for b in batch]), device=device, dtype=torch.float32)
     ret = torch.as_tensor(np.array([b["ret"] for b in batch]), device=device, dtype=torch.float32)
-    return {"obs": obs, "act": act, "logp": logp, "adv": adv, "ret": ret}
+    result = {"obs": obs, "act": act, "logp": logp, "adv": adv, "ret": ret}
+
+    # 添加 old_values（用于 Value Function Clipping）
+    # 兼容旧格式：如果轨迹中没有 "value" 键，则跳过
+    if batch and "value" in batch[0]:
+        old_values = torch.as_tensor(
+            np.array([b["value"] for b in batch]), device=device, dtype=torch.float32
+        )
+        result["old_values"] = old_values
+
+    return result
 
 
 def _ppo_loss(
@@ -88,17 +157,19 @@ def _ppo_loss(
     clip_ratio: float,
     vf_coef: float,
     ent_coef: float,
+    clip_ratio_value: float = 0.2,
 ) -> tuple[torch.Tensor, dict[str, float]]:
     """
     PPO（Proximal Policy Optimization）损失函数
-    包含三部分损失：策略损失（clip）、价值损失、熵损失
+    包含三部分损失：策略损失（clip）、价值损失（带 Value Clipping）、熵损失
 
     Args:
         model: Actor-Critic 模型
         batch_t: 批量张量数据
-        clip_ratio: PPO 裁剪比率，控制策略更新幅度
+        clip_ratio: PPO 策略裁剪比率，控制策略更新幅度
         vf_coef: 价值损失系数
         ent_coef: 熵系数，鼓励探索
+        clip_ratio_value: 价值函数裁剪比率，限制价值函数每次更新幅度
 
     Returns:
         总损失和指标字典
@@ -108,6 +179,7 @@ def _ppo_loss(
     old_logp = batch_t["logp"]  # 旧策略的对数概率
     adv = batch_t["adv"]          # 优势函数（已在外部全局标准化）
     ret = batch_t["ret"]          # 回报值
+    old_values = batch_t.get("old_values")  # 旧价值估计（用于 Value Clipping）
 
     # 前向传播：获取新策略分布和价值估计
     dist, v = model.get_dist_and_value(obs)
@@ -121,27 +193,35 @@ def _ppo_loss(
     # 策略损失：取原始比率 * 优势 和 裁剪后 * 优势 的最小值
     policy_loss = -(torch.min(ratio * adv, clip_adv)).mean()
 
-    # Value Loss Clipping（标准 PPO 做法）
-    # 获取旧的价值估计（需要从 batch 中传入，这里我们用当前 v 作为近似）
-    # 注意：完整实现需要保存 old_v，但为了简化，我们先不做 clipping
-    # 仅保持 0.5 系数的 MSE
-    value_loss = 0.5 * torch.nn.functional.mse_loss(v, ret)
+    # Value Function Clipping（标准 PPO 做法）
+    # 限制 value 函数每次更新的幅度，防止价值预测剧变导致 GAE 优势估计失真
+    if old_values is not None:
+        values_clipped = old_values + torch.clamp(
+            v - old_values, -clip_ratio_value, clip_ratio_value
+        )
+        value_loss_unclipped = (v - ret) ** 2
+        value_loss_clipped = (values_clipped - ret) ** 2
+        value_loss = 0.5 * torch.max(value_loss_unclipped, value_loss_clipped).mean()
+    else:
+        # 兼容旧格式：没有 old_values 时使用普通 MSE
+        value_loss = 0.5 * torch.nn.functional.mse_loss(v, ret)
 
     # 熵损失：最大化熵以保持探索（添加下限保护）
     entropy = dist.entropy().sum(axis=-1).mean()
     entropy_loss = -entropy
 
     # 自适应 entropy 系数：entropy 越低，ent_coef 越大
-    min_entropy = 0.5
+    # 第二轮优化：降低阈值（0.5→0.3）和系数（3.0→2.0），避免过度干预正常的熵衰减
+    min_entropy = 0.3
     if entropy.item() < min_entropy:
-        adaptive_ent_coef = ent_coef * (1.0 + 3.0 * (min_entropy - entropy.item()) / min_entropy)
+        adaptive_ent_coef = ent_coef * (1.0 + 2.0 * (min_entropy - entropy.item()) / min_entropy)
     else:
         adaptive_ent_coef = ent_coef
 
     # 总损失 = 策略损失 + 价值损失系数 * 价值损失 + 熵系数 * 熵损失
     loss = policy_loss + vf_coef * value_loss + adaptive_ent_coef * entropy_loss
 
-    # 新增监控指标
+    # 监控指标
     with torch.no_grad():
         approx_kl = 0.5 * ((new_logp - old_logp) ** 2).mean().item()
         clip_frac = ((ratio - 1.0).abs() > clip_ratio).float().mean().item()
@@ -174,6 +254,7 @@ class MuJoCoActor:
     2. 与环境交互采集轨迹数据
     3. 计算 GAE（广义优势估计）
     4. 异步并行运行多个实例以提高采样效率
+    5. 观测值归一化：对原始观测值归一化后再喂给网络
     """
     def __init__(self, env_name: str, actor_id: int, seed: int, hidden_sizes: list[int] | tuple[int, int]) -> None:
         import gymnasium as gym
@@ -200,7 +281,10 @@ class MuJoCoActor:
         self.model = ActorCritic(self.obs_dim, self.action_dim, hidden_sizes=hidden_sizes)
         self.model.eval()  # 设置为评估模式
 
-        self._obs = obs  # 保存当前观测
+        # 观测值归一化统计量
+        self.obs_rms = RunningMeanStd(self.obs_dim)
+
+        self._obs = obs  # 保存当前观测（原始值）
 
     def sample(
         self,
@@ -208,21 +292,32 @@ class MuJoCoActor:
         rollout_length: int,
         gamma: float,
         gae_lambda: float,
+        obs_rms_state: dict[str, Any] | None = None,
     ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         """
         执行策略采样并计算 GAE
+        
         Args:
             state_dict: 最新的模型参数
             rollout_length: 单次采样轨迹长度
             gamma: 折扣因子
             gae_lambda: GAE lambda 参数
+            obs_rms_state: 观测归一化统计量（从 ParameterServer 同步）
+        
         Returns:
-            traj: 采样的轨迹数据，包含 obs, act, logp, adv, ret
-            stats: 统计信息（回合数、回报等）
+            traj: 采样的轨迹数据，包含归一化后的 obs, act, logp, value, adv, ret
+            stats: 统计信息（回合数、回报等 + obs_rms_state）
         """
         # 更新模型参数（如果是第一次则为 None）
         if state_dict is not None:
             self.model.load_state_dict(state_dict)
+
+        # 同步观测归一化统计量（从全局 ParameterServer 获取）
+        if obs_rms_state is not None:
+            self.obs_rms.set_state(obs_rms_state)
+
+        # 收集原始观测值用于更新统计量
+        raw_obs_list: list[np.ndarray] = []
 
         # 初始化存储列表
         traj: list[dict[str, Any]] = []  # 轨迹数据
@@ -239,8 +334,13 @@ class MuJoCoActor:
 
         # 采样循环：与环境交互收集轨迹
         for _ in range(rollout_length):
-            # 将观测转换为张量并增加批次维度
-            obs_t = torch.as_tensor(self._obs, dtype=torch.float32).unsqueeze(0)
+            # 保存原始观测用于统计量更新
+            raw_obs = np.asarray(self._obs, dtype=np.float32)
+            raw_obs_list.append(raw_obs)
+
+            # 归一化观测值后再喂给网络
+            obs_normalized = self.obs_rms.normalize(raw_obs)
+            obs_t = torch.as_tensor(obs_normalized, dtype=torch.float32).unsqueeze(0)
 
             # 前向传播：获取策略分布和价值估计（不计算梯度）
             with torch.no_grad():
@@ -258,12 +358,13 @@ class MuJoCoActor:
             next_obs, reward, terminated, truncated, _ = self.env.step(action_clipped)
             done = bool(terminated or truncated)
 
-            # 保存轨迹数据（存储实际执行的动作）
+            # 保存轨迹数据（存储归一化后的观测值 + 价值估计用于 Value Clipping）
             traj.append(
                 {
-                    "obs": np.asarray(self._obs, dtype=np.float32),
+                    "obs": obs_normalized,  # 归一化后的观测值
                     "act": np.asarray(action_clipped, dtype=np.float32),
                     "logp": float(logp_t.item()),
+                    "value": float(value_t.item()),  # 旧价值估计，用于 Value Function Clipping
                 }
             )
             values.append(float(value_t.item()))
@@ -286,9 +387,15 @@ class MuJoCoActor:
                 ep_return = 0.0
                 ep_len = 0
 
-        # 获取最后一个状态的价值估计（用于 GAE 计算）
+        # 更新观测归一化统计量（使用原始观测值）
+        if raw_obs_list:
+            self.obs_rms.update(np.stack(raw_obs_list, axis=0))
+
+        # 获取最后一个状态的价值估计（使用归一化观测）
         with torch.no_grad():
-            obs_t = torch.as_tensor(self._obs, dtype=torch.float32).unsqueeze(0)
+            raw_last_obs = np.asarray(self._obs, dtype=np.float32)
+            last_obs_normalized = self.obs_rms.normalize(raw_last_obs)
+            obs_t = torch.as_tensor(last_obs_normalized, dtype=torch.float32).unsqueeze(0)
             _, last_value = self.model.get_dist_and_value(obs_t)
         last_value = float(last_value.item())
 
@@ -337,6 +444,7 @@ class MuJoCoActor:
             "episodes": episodes,
             "episode_return_sum": episode_return_sum,
             "episode_len_sum": episode_len_sum,
+            "obs_rms_state": self.obs_rms.get_state(),  # 返回更新后的归一化统计量
         }
         return traj, stats
 
@@ -348,7 +456,7 @@ class Learner:
     功能：
     1. 维护 Actor-Critic 模型
     2. 从 ReplayBuffer 采样数据进行训练
-    3. 计算 PPO 损失并更新模型参数
+    3. 计算 PPO 损失并更新模型参数（含 Value Function Clipping）
     4. 将更新后的参数返回供 ParameterServer 同步
     """
     def __init__(self, obs_dim: int, action_dim: int, replay_buffer: Any, cfg: dict[str, Any]) -> None:
@@ -370,12 +478,15 @@ class Learner:
         )
         self.model.train()  # 设置为训练模式
 
-        # 新增：学习率线性衰减（基于迭代步数）
+        # 学习率线性衰减（基于迭代步数）
         self.total_updates = 0
         self.current_iter = 0
         self.max_iters = int(cfg.get("max_iters", 1000))
         self.initial_lr = float(cfg["lr"])
         self.lr_schedule = cfg.get("lr_schedule", "linear")
+
+        # Value Function Clipping 比率
+        self.clip_ratio_value = float(cfg.get("clip_ratio_value", 0.2))
 
     def _update_lr(self) -> float:
         """更新学习率（基于迭代步数的线性衰减）"""
@@ -422,7 +533,7 @@ class Learner:
         if not all_data:
             return {"state_dict": self.model.state_dict(), "metrics": {}}
 
-        # 新增：全局 Advantage 标准化
+        # 全局 Advantage 标准化
         all_advs = np.array([d["adv"] for d in all_data])
         adv_mean = float(all_advs.mean())
         adv_std = float(all_advs.std()) + 1e-8
@@ -452,23 +563,24 @@ class Learner:
                 batch_indices = indices[start_idx:end_idx]
                 batch = [all_data[i] for i in batch_indices]
 
-                # 将批量数据转换为张量
+                # 将批量数据转换为张量（包含 old_values 用于 Value Clipping）
                 batch_t = _to_tensor(batch, self.device)
 
-                # 计算 PPO 损失和指标
+                # 计算 PPO 损失和指标（含 Value Function Clipping）
                 loss, metrics = _ppo_loss(
                     self.model,
                     batch_t,
                     clip_ratio=float(self.cfg["clip_ratio"]),
                     vf_coef=float(self.cfg["vf_coef"]),
                     ent_coef=float(self.cfg["ent_coef"]),
+                    clip_ratio_value=self.clip_ratio_value,
                 )
 
                 # 反向传播更新参数
                 self.optimizer.zero_grad(set_to_none=True)
                 loss.backward()
                 
-                # 新增：梯度裁剪
+                # 梯度裁剪
                 grad_norm = torch.nn.utils.clip_grad_norm_(
                     self.model.parameters(), max_norm=max_grad_norm
                 )
@@ -476,7 +588,7 @@ class Learner:
                 
                 self.optimizer.step()
                 
-                # 新增：更新计数
+                # 更新计数
                 self.total_updates += 1
                 updates_this_call += 1
 
@@ -499,7 +611,7 @@ class Learner:
             for k in list(metrics_acc.keys()):
                 metrics_acc[k] /= float(updates_this_call)
         
-        # 新增：添加平均梯度范数和当前学习率到指标
+        # 添加平均梯度范数和当前学习率到指标
         if updates_this_call > 0:
             metrics_acc["grad_norm"] = grad_norm_acc / float(updates_this_call)
         metrics_acc["lr"] = current_lr

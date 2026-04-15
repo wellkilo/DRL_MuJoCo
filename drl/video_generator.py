@@ -23,6 +23,7 @@ import imageio
 
 from drl.config_loader import load_config
 from drl.models import ActorCritic
+from drl.running_mean_std import RunningMeanStd
 
 
 def generate_video(
@@ -117,13 +118,23 @@ def generate_video(
         else:
             print(f"[Video Generator] No model files found, using random initialization", flush=True)
         
+        # 观测值归一化统计量
+        obs_rms = RunningMeanStd(obs_dim)
+        obs_rms_state = None
+
         if selected_model_path:
             try:
-                state_dict = torch.load(selected_model_path, map_location="cpu")
-                if "actor" in state_dict:
-                    model.load_state_dict(state_dict["actor"])
+                checkpoint = torch.load(selected_model_path, map_location="cpu")
+                if isinstance(checkpoint, dict) and "actor" in checkpoint:
+                    model.load_state_dict(checkpoint["actor"])
+                    # 加载观测归一化统计量
+                    if checkpoint.get("obs_rms_state") is not None:
+                        obs_rms.set_state(checkpoint["obs_rms_state"])
+                        obs_rms_state = checkpoint["obs_rms_state"]
+                        print(f"[Video Generator] Obs RMS state loaded from {selected_model_path}", flush=True)
                 else:
-                    model.load_state_dict(state_dict)
+                    # 兼容旧格式（直接是 state_dict）
+                    model.load_state_dict(checkpoint)
                 print(f"[Video Generator] Model loaded successfully from {selected_model_path}", flush=True)
             except Exception as e:
                 print(f"[Video Generator] Error loading model: {e}", flush=True)
@@ -143,9 +154,10 @@ def generate_video(
                 print(f"[Video Generator]   Frame {frame_idx}/{total_frames} ({frame_idx/total_frames*100:.1f}%)", flush=True)
             
             try:
-                # 选择动作
+                # 选择动作（使用归一化后的观测值）
                 with torch.no_grad():
-                    obs_tensor = torch.tensor(obs, dtype=torch.float32).unsqueeze(0)
+                    obs_normalized = obs_rms.normalize(np.asarray(obs, dtype=np.float32))
+                    obs_tensor = torch.tensor(obs_normalized, dtype=torch.float32).unsqueeze(0)
                     dist, _ = model.get_dist_and_value(obs_tensor)
                     action = dist.mean.squeeze(0).numpy()
                     # 裁剪动作到合法范围

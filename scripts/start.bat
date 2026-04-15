@@ -93,7 +93,7 @@ if "!choice!"=="1" (
     echo Next.js will proxy /api and /ws to FastAPI backend at http://127.0.0.1:8000
     echo Starting FastAPI backend in background...
     cd /d "%REPO_ROOT%"
-    start "DRL_MuJoCo_FastAPI" /min python "%REPO_ROOT%\web\server.py"
+    start "DRL_MuJoCo_FastAPI" /min "%CONDA_PREFIX%\python.exe" "%REPO_ROOT%\web\server.py"
     echo Waiting for FastAPI backend to start...
     set "backend_ready=0"
     for /l %%i in (1,1,15) do (
