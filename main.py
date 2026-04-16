@@ -278,7 +278,6 @@ def main() -> None:
 
         # 阶段2：进行一次完整的 on-policy 学习更新
         size = ray.get(replay_buffer.size.remote())
-        print(f"[Main] Train step {train_step}: Collected {size} samples, starting training...", flush=True)
         
         # Learner 进行多轮梯度更新
         train_out = ray.get(learner.train_step.remote(cfg.learner_updates_per_iter))
@@ -288,7 +287,15 @@ def main() -> None:
         # 将更新后的模型参数同步到 ParameterServer（保持一致性）
         ray.get(param_server.set.remote(current_params))
 
-        # 记录和保存训练指标
+        # ===== 关键优化：先发起 Actor 采样，再做保存等操作 =====
+        # 这样 Actor 采样和模型保存/日志记录可以并行执行
+        current_obs_rms = ray.get(param_server.get_obs_rms.remote())
+        actor_tasks = {
+            actor.sample.remote(current_params, cfg.rollout_length, cfg.gamma, cfg.gae_lambda, current_obs_rms): actor
+            for actor in actors
+        }
+
+        # ===== 阶段3：日志和模型保存（此时 Actor 已经在并行采样） =====
         elapsed = time.time() - start_time
         sps = total_steps / elapsed if elapsed > 0 else 0.0
         avg_return = sum(recent_returns) / len(recent_returns) if recent_returns else math.nan
@@ -328,36 +335,28 @@ def main() -> None:
         )
         metrics_file.flush()  # 立即写入文件
         
-        # 定期保存模型（包含 obs_rms 统计量）
-        print(f"[Main] Saving model at train step {train_step}...", flush=True)
+        # 保存模型（直接用 train_out 中的 state_dict，无需再 ray.get(learner.get_state)）
         try:
-            current_state = ray.get(learner.get_state.remote())
-            current_obs_rms_for_save = ray.get(param_server.get_obs_rms.remote())
-            config_name = Path(config_path).stem
             model_path = OUTPUT_DIR / f"model_{config_name}.pt"
-            torch.save({"actor": current_state, "obs_rms_state": current_obs_rms_for_save}, model_path)
-            print(f"[Main] Model saved to {model_path}", flush=True)
+            torch.save({"actor": current_params, "obs_rms_state": current_obs_rms}, model_path)
             
             # 检查是否为最佳模型，如果是则保存
             if not math.isnan(avg_return) and avg_return > best_avg_return:
                 best_avg_return = avg_return
                 global_state["best_avg_return"] = best_avg_return
                 best_model_path = OUTPUT_DIR / f"model_{config_name}_best.pt"
-                torch.save({"actor": current_state, "obs_rms_state": current_obs_rms_for_save}, best_model_path)
-                print(f"[Main] Best model saved to {best_model_path} with avg_return {best_avg_return:.2f}", flush=True)
+                torch.save({"actor": current_params, "obs_rms_state": current_obs_rms}, best_model_path)
+                print(f"[Main] Best model: avg_return={best_avg_return:.2f}", flush=True)
         except Exception as e:
             print(f"[Main] Error saving model: {e}", flush=True)
-        
-        # 阶段3：让所有 Actor 使用最新参数继续采样（为下一轮准备）
-        # 获取最新的 obs_rms 统计量，传给所有 Actor
-        current_obs_rms = ray.get(param_server.get_obs_rms.remote())
-        actor_tasks = {
-            actor.sample.remote(current_params, cfg.rollout_length, cfg.gamma, cfg.gae_lambda, current_obs_rms): actor
-            for actor in actors
-        }
 
-        # 避免过度占用 CPU
-        time.sleep(0.01)
+        # 打印日志（减少频率）
+        if train_step % 10 == 0:
+            print(
+                f"[Main] Step {train_step}/{cfg.max_iters} | "
+                f"avg_return={avg_return:.1f} | steps={total_steps:,} | SPS={sps:.0f}",
+                flush=True
+            )
 
     # 训练结束，保存模型（包含 obs_rms 统计量）
     final_state = ray.get(learner.get_state.remote())
