@@ -22,4 +22,5 @@ max_grad_norm: 0.5
 target_kl: 0.02
 lr_schedule: "linear"
 clip_ratio_value: 0.2
+warmup_iters: 50
 ray_address:

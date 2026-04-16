@@ -281,6 +281,12 @@ class MuJoCoActor:
         # 观测值归一化统计量
         self.obs_rms = RunningMeanStd(self.obs_dim)
 
+        # ===== 新增：奖励归一化 =====
+        # 用折扣回报的 running std 来缩放奖励（不减 mean，只除以 std）
+        # 解决 HalfCheetah 等环境初始回报为负导致 value 函数估计偏差大的问题
+        self.ret_rms = RunningMeanStd(shape=(1,))
+        self._discounted_return = 0.0
+
         self._obs = obs  # 保存当前观测（原始值）
 
     def sample(
@@ -355,6 +361,14 @@ class MuJoCoActor:
             next_obs, reward, terminated, truncated, _ = self.env.step(action_clipped)
             done = bool(terminated or truncated)
 
+            # ===== 新增：奖励归一化 =====
+            # 用折扣回报的 running std 来缩放奖励（不减 mean，只除以 std）
+            raw_reward = float(reward)
+            self._discounted_return = self._discounted_return * gamma * (1.0 - float(done)) + raw_reward
+            self.ret_rms.update(np.array([[self._discounted_return]]))
+            reward_std = np.sqrt(self.ret_rms.var[0] + 1e-8)
+            normalized_reward = np.clip(raw_reward / reward_std, -10.0, 10.0)
+
             # 保存轨迹数据（存储归一化后的观测值 + 价值估计用于 Value Clipping）
             traj.append(
                 {
@@ -365,11 +379,11 @@ class MuJoCoActor:
                 }
             )
             values.append(float(value_t.item()))
-            rewards.append(float(reward))
+            rewards.append(float(normalized_reward))  # 改：使用归一化后的奖励训练
             dones.append(float(done))
 
-            # 更新当前回合统计
-            ep_return += float(reward)
+            # 更新当前回合统计（仍用原始奖励，保持 avg_return 含义不变）
+            ep_return += raw_reward
             ep_len += 1
             self._obs = next_obs
 
@@ -383,6 +397,7 @@ class MuJoCoActor:
                 self._obs = obs
                 ep_return = 0.0
                 ep_len = 0
+                self._discounted_return = 0.0  # 新增：重置折扣回报
 
         # 更新观测归一化统计量（使用原始观测值）
         if raw_obs_list:
@@ -485,13 +500,23 @@ class Learner:
         # Value Function Clipping 比率
         self.clip_ratio_value = float(cfg.get("clip_ratio_value", 0.2))
 
+        # ===== 新增：warmup 配置 =====
+        self.warmup_iters = int(cfg.get("warmup_iters", 50))
+
     def _update_lr(self) -> float:
-        """更新学习率（基于迭代步数的线性衰减）"""
-        if self.lr_schedule == "linear":
+        """更新学习率（含 warmup + 线性衰减）"""
+        if self.current_iter < self.warmup_iters:
+            # Warmup：线性递增，避免初始大梯度导致训练不稳定
+            frac = self.current_iter / max(self.warmup_iters, 1)
+            new_lr = self.initial_lr * frac
+        elif self.lr_schedule == "linear":
             frac = max(1.0 - (self.current_iter / self.max_iters), 0.0)
             new_lr = self.initial_lr * frac
         else:
             new_lr = self.initial_lr
+        
+        # 确保 lr 不为 0
+        new_lr = max(new_lr, self.initial_lr * 0.01)
         
         for param_group in self.optimizer.param_groups:
             param_group["lr"] = new_lr

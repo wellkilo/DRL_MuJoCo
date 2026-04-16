@@ -1,7 +1,7 @@
 env_name: Walker2d-v5
 num_actors: 8
 replay_buffer_capacity: 200000
-batch_size: 256
+batch_size: 512
 gamma: 0.99
 gae_lambda: 0.95
 lr: 0.0001
@@ -22,4 +22,5 @@ max_grad_norm: 0.5
 target_kl: 0.015
 lr_schedule: "linear"
 clip_ratio_value: 0.2
+warmup_iters: 50
 ray_address:
