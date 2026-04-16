@@ -24,40 +24,37 @@ def _merge_obs_rms_states(states: list[dict[str, Any]]) -> dict[str, Any] | None
     """
     合并多个 Actor 的观测归一化统计量
     
-    使用 Welford 并行合并公式，将多个独立采集的统计量合并为全局统计量。
-    这确保所有 Actor 使用一致的归一化参数。
+    使用 _update_from_moments（内含 count 上限保护）合并多个独立采集的统计量。
+    这确保所有 Actor 使用一致的归一化参数，同时防止 count 无限增长导致溢出。
     
     Args:
         states: 各 Actor 的 obs_rms 状态列表
     
     Returns:
-        合并后的 obs_rms 状态字典，或 None（如果输入为空）
+        合并后的 obs_rms 状态字典，或 None（如果输入为空或全部无效）
     """
-    if not states:
+    # 过滤无效状态（含 NaN/inf 的 mean 或 var）
+    valid_states = [
+        s for s in states
+        if s is not None
+        and np.all(np.isfinite(s["mean"]))
+        and np.all(np.isfinite(s["var"]))
+    ]
+
+    if not valid_states:
         return None
-    if len(states) == 1:
-        return states[0]
+    if len(valid_states) == 1:
+        return valid_states[0]
 
     # 使用第一个状态作为基础，逐个合并
-    merged = RunningMeanStd(shape=states[0]["mean"].shape)
-    merged.set_state(states[0])
+    merged = RunningMeanStd(shape=valid_states[0]["mean"].shape)
+    merged.set_state(valid_states[0])
 
-    for state in states[1:]:
+    for state in valid_states[1:]:
         other = RunningMeanStd(shape=state["mean"].shape)
         other.set_state(state)
-
-        # Welford 并行合并公式
-        a_count = merged.count
-        b_count = other.count
-        total_count = a_count + b_count
-        delta = other.mean - merged.mean
-
-        merged.mean = merged.mean + delta * b_count / total_count
-        m_a = merged.var * a_count
-        m_b = other.var * b_count
-        m2 = m_a + m_b + np.square(delta) * a_count * b_count / total_count
-        merged.var = m2 / total_count
-        merged.count = total_count
+        # 使用修复后的 _update_from_moments（内含 count 上限保护和 var 安全检查）
+        merged._update_from_moments(other.mean, other.var, other.count)
 
     return merged.get_state()
 
