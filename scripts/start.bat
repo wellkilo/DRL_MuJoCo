@@ -63,8 +63,8 @@ if "!choice!"=="1" (
 ) else if "!choice!"=="3" (
     echo.
     echo Plotting training curves...
-    python "%REPO_ROOT%\scripts\plot_training.py"
-    echo Curves saved to: output\training_curves.png
+    python "%REPO_ROOT%\scripts\plot_training.py" --all
+    echo Curves saved to: output\figures\
 ) else if "!choice!"=="4" (
     echo.
     echo Plotting comparison curves...
