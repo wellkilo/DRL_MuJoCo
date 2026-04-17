@@ -61,8 +61,8 @@ case $choice in
     3)
         echo ""
         echo "Plotting training curves..."
-        "$CONDA_PREFIX/bin/python" "$REPO_ROOT/scripts/plot_training.py"
-        echo "Curves saved to: output/training_curves.png"
+        "$CONDA_PREFIX/bin/python" "$REPO_ROOT/scripts/plot_training.py" --all
+        echo "Curves saved to: output/figures/"
         ;;
     4)
         echo ""
