@@ -105,7 +105,11 @@ DRL_MuJoCo/
 │   └── video_generator.py     # 视频生成
 ├── config/                    # 配置文件
 │   ├── config.yaml            # 分布式训练 (8 Actors)
-│   └── config_single.yaml     # 单机训练 (1 Actor)
+│   ├── config_single.yaml     # 单机训练 (1 Actor)
+│   ├── walker2d.yaml          # Walker2d 分布式配置
+│   ├── walker2d_single.yaml   # Walker2d 单机配置
+│   ├── halfcheetah.yaml       # HalfCheetah 分布式配置
+│   └── halfcheetah_single.yaml # HalfCheetah 单机配置
 ├── web/                       # Web UI
 │   ├── server.py              # FastAPI 后端
 │   ├── next.config.ts         # Next.js 配置
@@ -124,11 +128,19 @@ DRL_MuJoCo/
 │   │   └── lib.rs             # PyO3 绑定
 │   ├── Cargo.toml
 │   └── pyproject.toml
-└── scripts/                   # 辅助脚本
-    ├── build.sh               # 环境搭建
-    ├── start.sh               # 交互式启动器
-    ├── plot_training.py       # 训练曲线
-    └── plot_comparison.py     # 对比曲线
+├── scripts/                   # 辅助脚本
+│   ├── build.sh               # 环境搭建
+│   ├── start.sh               # 交互式启动器
+│   ├── plot_training.py       # 训练曲线
+│   ├── plot_comparison.py     # 对比曲线
+│   └── slurm/                 # 🆕 Slurm 集群脚本
+│       ├── setup_env.sh       #   Conda 环境创建
+│       ├── run_single.sh      #   单机训练 sbatch
+│       ├── run_distributed.sh #   分布式训练 sbatch
+│       ├── run_all_envs.sh    #   批量提交 3环境×2模式
+│       ├── run_plot.sh        #   训练后绘图
+│       └── monitor.sh         #   作业监控工具
+└── logs/                      # 🆕 Slurm 日志目录
 ```
 
 ---
@@ -386,3 +398,122 @@ maturin develop --release
 │                     Backend (Python)                      │
 └──────────────────────────────────────────────────────────┘
 ```
+
+---
+
+## 🖥️ Slurm 集群使用指南
+
+项目提供了完整的 Slurm 集群训练脚本，支持在 GPU 集群上提交分布式/单机训练作业。
+
+### 第一步：上传项目到集群
+
+```bash
+# 在本地机器上，将项目上传到集群
+scp -r ./DRL_MuJoCo <用户名>@<集群地址>:~/DRL_MuJoCo
+```
+
+### 第二步：SSH 登录集群
+
+```bash
+ssh <用户名>@<集群地址>
+cd ~/DRL_MuJoCo
+```
+
+### 第三步：创建 Conda 环境（仅首次需要）
+
+```bash
+# 直接在管理节点上运行（不需要 sbatch）
+bash scripts/slurm/setup_env.sh
+```
+
+> ⚠️ **运行前先检查集群 CUDA 版本**：
+> ```bash
+> nvidia-smi  # 查看右上角 CUDA Version
+> ```
+> 如果是 CUDA 12.1，需先编辑 `scripts/slurm/setup_env.sh` 将 `cu118` 改为 `cu121`。
+
+这一步完成后，`drl_mujoco` Conda 环境就创建好了，**以后不需要再运行**。
+
+### 第四步：提交训练作业
+
+**方式 A — 单独提交一个任务**：
+
+```bash
+# 单机模式（Hopper，默认配置）
+sbatch scripts/slurm/run_single.sh
+
+# 分布式模式（Hopper，默认配置）
+sbatch scripts/slurm/run_distributed.sh
+
+# 指定其他环境配置
+sbatch scripts/slurm/run_single.sh config/walker2d_single.yaml
+sbatch scripts/slurm/run_distributed.sh config/walker2d.yaml
+sbatch scripts/slurm/run_single.sh config/halfcheetah_single.yaml
+sbatch scripts/slurm/run_distributed.sh config/halfcheetah.yaml
+```
+
+**方式 B — 一键批量提交全部 6 个任务（推荐）**：
+
+```bash
+# 先用 --dry-run 预览会提交什么
+bash scripts/slurm/run_all_envs.sh --dry-run
+
+# 确认无误后实际提交
+bash scripts/slurm/run_all_envs.sh
+```
+
+这会自动提交：Hopper / Walker2d / HalfCheetah × 单机/分布式 = 6 个作业。
+
+### 第五步：监控训练进度
+
+```bash
+# 查看所有作业状态
+bash scripts/slurm/monitor.sh
+
+# 实时查看某个作业的日志（用 squeue 获取 JOB_ID）
+bash scripts/slurm/monitor.sh <JOB_ID>
+
+# 取消所有作业
+bash scripts/slurm/monitor.sh --cancel-all
+```
+
+### 第六步：训练完成后绘图
+
+```bash
+# 绘制全部图表
+sbatch scripts/slurm/run_plot.sh
+
+# 或仅绘制特定类型
+sbatch scripts/slurm/run_plot.sh --training     # 训练详情图
+sbatch scripts/slurm/run_plot.sh --comparison   # 多环境对比图
+```
+
+### Slurm 脚本资源分配
+
+| 脚本 | CPUs | 内存 | GPU | 时限 | 说明 |
+|:-----|:----:|:----:|:---:|:----:|------|
+| `run_single.sh` | 4 | 8G | 1 | 7天 | 单机 1 Actor + 1 Learner |
+| `run_distributed.sh` | 12 | 32G | 1 | 7天 | 分布式 8 Actors + Ray 集群 |
+| `run_plot.sh` | 2 | 4G | 0 | 1小时 | 纯 CPU 绘图任务 |
+
+### 执行流程总结
+
+```
+首次使用:
+  ① bash scripts/slurm/setup_env.sh        ← 仅需运行一次
+
+每次训练:
+  ② sbatch scripts/slurm/run_single.sh     ← 提交单机训练
+     或
+     sbatch scripts/slurm/run_distributed.sh ← 提交分布式训练
+     或
+     bash scripts/slurm/run_all_envs.sh      ← 一键提交全部6个任务
+
+训练中:
+  ③ bash scripts/slurm/monitor.sh           ← 监控作业
+
+训练后:
+  ④ sbatch scripts/slurm/run_plot.sh        ← 绘图
+```
+
+> 日志文件自动写入 `logs/` 目录，格式为 `single_<JOBID>.out`、`dist_<JOBID>.out`、`plot_<JOBID>.out`。
