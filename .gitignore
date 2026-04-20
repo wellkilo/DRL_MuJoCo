@@ -10,6 +10,13 @@ output/
 .idea/
 .vscode/
 ray_results/
+
+# Slurm logs (keep .gitkeep)
+logs/*
+!logs/.gitkeep
+
+# Ray temp directories
+.ray_tmp_*
 *.pt
 *.pth
 *.ckpt
