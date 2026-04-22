@@ -68,6 +68,7 @@ class ParameterServer:
     2. 存储观测归一化统计量（obs_rms）
     3. 供所有 Actor 和 Learner 异步读写
     4. 实现参数在分布式节点间的同步
+    5. 支持多 Learner 参数平均（Parameter Averaging）
     """
     def __init__(self) -> None:
         self._state_dict: dict[str, Any] | None = None
@@ -80,6 +81,31 @@ class ParameterServer:
     def set(self, state_dict: dict[str, Any]) -> None:
         """更新存储的模型参数"""
         self._state_dict = state_dict
+
+    def average_and_set(self, param_list: list[dict[str, Any]]) -> dict[str, Any]:
+        """
+        对多个 Learner 的 state_dict 做参数平均, 并设置为全局参数.
+
+        Args:
+            param_list: [state_dict_0, state_dict_1, ..., state_dict_N]
+
+        Returns:
+            平均后的参数字典
+        """
+        if not param_list:
+            return self._state_dict
+        if len(param_list) == 1:
+            self._state_dict = param_list[0]
+            return self._state_dict
+
+        # 参数平均
+        avg_state: dict[str, Any] = {}
+        for key in param_list[0]:
+            tensors = [p[key].float() for p in param_list]
+            avg_state[key] = (sum(tensors) / len(tensors)).to(param_list[0][key].dtype)
+
+        self._state_dict = avg_state
+        return self._state_dict
 
     def update_obs_rms(self, obs_rms_state: dict[str, Any]) -> None:
         """更新观测归一化统计量"""
@@ -461,7 +487,7 @@ class MuJoCoActor:
         return traj, stats
 
 
-@ray.remote
+@ray.remote(num_gpus=1)
 class Learner:
     """
     Learner - 学习器
@@ -523,16 +549,29 @@ class Learner:
         return new_lr
 
     def _select_device(self) -> torch.device:
-        """根据硬件可用性选择最佳计算设备"""
+        """
+        根据 Ray 分配的 GPU 选择计算设备.
+
+        当 Learner 被 @ray.remote(num_gpus=1) 标注后,
+        Ray 会自动为该 Worker 设置 CUDA_VISIBLE_DEVICES=X
+        （X 是实际分配的 GPU 编号）,
+        从 Worker 内部看始终是 cuda:0.
+        """
         if torch.cuda.is_available() and self.cfg.get("use_cuda", True):
-            return torch.device("cuda")
-        if torch.backends.mps.is_available() and self.cfg.get("use_mps", True):
+            # Ray 会自动设置 CUDA_VISIBLE_DEVICES, 只需用 cuda:0
+            # 因为从 Ray Worker 视角看, 被分配的 GPU 总是 cuda:0
+            return torch.device("cuda:0")
+        if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available() and self.cfg.get("use_mps", True):
             return torch.device("mps")
         return torch.device("cpu")
 
     def get_state(self) -> dict[str, Any]:
         """获取当前模型状态字典"""
         return self.model.state_dict()
+
+    def set_state(self, state_dict: dict[str, Any]) -> None:
+        """从外部加载模型参数 (用于多 Learner 参数同步)"""
+        self.model.load_state_dict(state_dict)
 
     def train_step(self, updates: int) -> dict[str, Any]:
         """

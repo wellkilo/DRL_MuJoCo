@@ -80,6 +80,11 @@ ENVIRONMENTS = {
     },
 }
 
+# 支持 GPU 信息检测
+import torch
+AVAILABLE_GPUS = torch.cuda.device_count() if torch.cuda.is_available() else 0
+print(f"[Server] Available GPUs: {AVAILABLE_GPUS}", flush=True)
+
 # 全局变量
 training_tasks: dict[str, asyncio.subprocess.Process] = {}  # 每个环境的训练进程
 active_env: str = "hopper"  # 当前活跃环境
@@ -283,6 +288,119 @@ async def get_training_logs(env: str = Query("hopper"), lines: int = Query(50)) 
     # 返回最后 N 行
     recent = output_lines[-lines:] if output_lines else []
     return {"env": env, "lines": recent, "total": len(output_lines)}
+
+
+# ==================== GPU 扩展实验 API ====================
+
+def _discover_scaling_configs() -> dict:
+    """扫描 config/scaling/ 目录, 发现可用的 GPU 扩展配置"""
+    scaling_dir = REPO_ROOT / "config" / "scaling"
+    configs: dict[str, Any] = {}
+    if not scaling_dir.exists():
+        return configs
+    for yaml_file in sorted(scaling_dir.glob("*.yaml")):
+        # 文件名格式: hopper_gpu4.yaml
+        name = yaml_file.stem  # hopper_gpu4
+        parts = name.rsplit("_gpu", 1)
+        if len(parts) == 2:
+            env_key = parts[0]
+            try:
+                num_gpus = int(parts[1])
+            except ValueError:
+                continue
+            configs[name] = {
+                "env": env_key,
+                "num_gpus": num_gpus,
+                "config_path": str(yaml_file.relative_to(REPO_ROOT)),
+                "metrics_path": f"output/scaling/{name}/metrics.csv",
+            }
+    return configs
+
+
+@app.get("/api/scaling/configs")
+async def get_scaling_configs() -> dict[str, Any]:
+    """获取所有可用的 GPU 扩展实验配置"""
+    configs = _discover_scaling_configs()
+    return {"configs": configs}
+
+
+@app.get("/api/scaling/metrics")
+async def get_scaling_metrics(config_name: str = Query(...)) -> list[dict[str, Any]]:
+    """获取指定 GPU 扩展实验的 metrics"""
+    configs = _discover_scaling_configs()
+    if config_name not in configs:
+        return []
+    metrics_path = REPO_ROOT / configs[config_name]["metrics_path"]
+    return load_metrics_file(metrics_path)
+
+
+@app.post("/api/scaling/start")
+async def start_scaling_experiment(config_name: str = Query(...)) -> dict[str, Any]:
+    """启动 GPU 扩展实验"""
+    configs = _discover_scaling_configs()
+    if config_name not in configs:
+        return {"status": "error", "message": f"Config {config_name} not found"}
+
+    task_key = f"scaling_{config_name}"
+    if task_key in training_tasks and training_tasks[task_key].returncode is None:
+        return {"status": "already running"}
+
+    cfg = configs[config_name]
+    config_path = REPO_ROOT / cfg["config_path"]
+
+    # 确保输出目录
+    metrics_dir = REPO_ROOT / "output" / "scaling" / config_name
+    metrics_dir.mkdir(parents=True, exist_ok=True)
+
+    training_output[task_key] = []
+    training_tasks[task_key] = await asyncio.create_subprocess_exec(
+        sys.executable, str(REPO_ROOT / "main.py"), str(config_path),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+        cwd=str(REPO_ROOT),
+    )
+
+    asyncio.create_task(monitor_training_output(task_key))
+    return {"status": "started", "config": cfg}
+
+
+@app.get("/api/scaling/status")
+async def get_scaling_status() -> dict[str, Any]:
+    """获取所有 GPU 扩展实验的运行状态"""
+    statuses: dict[str, bool] = {}
+    for key, task in training_tasks.items():
+        if key.startswith("scaling_"):
+            config_name = key.replace("scaling_", "")
+            statuses[config_name] = task.returncode is None
+    return {"statuses": statuses}
+
+
+@app.get("/api/cluster/info")
+async def get_cluster_info() -> dict[str, Any]:
+    """获取集群 GPU 信息 (用于 UI 展示)"""
+    gpu_info: list[dict[str, Any]] = []
+    if torch.cuda.is_available():
+        for i in range(torch.cuda.device_count()):
+            props = torch.cuda.get_device_properties(i)
+            gpu_info.append({
+                "index": i,
+                "name": props.name,
+                "memory_gb": round(props.total_mem / 1e9, 1),
+            })
+
+    ray_resources: dict[str, Any] = {}
+    try:
+        import ray as _ray
+        if _ray.is_initialized():
+            ray_resources = dict(_ray.cluster_resources())
+    except Exception:
+        pass
+
+    return {
+        "gpu_count": len(gpu_info),
+        "gpus": gpu_info,
+        "ray_resources": ray_resources,
+    }
 
 
 # ==================== 视频生成 API ====================
@@ -520,5 +638,8 @@ if WEB_DIST.exists():
 
 
 if __name__ == "__main__":
+    import os
     import uvicorn
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    host = os.environ.get("WEBUI_HOST", "0.0.0.0")    # Slurm 需要 0.0.0.0
+    port = int(os.environ.get("WEBUI_PORT", "8000"))
+    uvicorn.run(app, host=host, port=port)

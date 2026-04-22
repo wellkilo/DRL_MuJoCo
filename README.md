@@ -31,6 +31,7 @@
 - **PPO 算法**：裁剪机制 + 自适应熵系数
 - **GAE**：广义优势估计
 - **自动设备选择**：CUDA → MPS → CPU
+- **🆕 多 GPU 扩展**：K Learners × M Actors，参数平均同步
 
 </td>
 <td width="50%">
@@ -62,6 +63,13 @@
 - 梯度裁剪 + KL 散度早停
 - 价值函数解释方差监控
 - Clip Fraction 实时追踪
+
+### 🆕 GPU 扩展实验
+- **多 Learner 并行**：每 GPU 独占 1 Learner + 8 Actors
+- **参数平均同步**：ParameterServer 周期性平均所有 Learner 参数
+- **自动缩放配置**：batch_size / buffer_capacity 随 GPU 数等比扩展
+- **Web UI 集成**：集群 GPU 信息展示 + 一键启动扩展实验
+- **批量实验提交**：4/8/16/32 GPU 一键对比实验
 
 </td>
 </tr>
@@ -95,12 +103,12 @@
 
 ```
 DRL_MuJoCo/
-├── main.py                    # 训练入口
+├── main.py                    # 训练入口（支持多 GPU 扩展）
 ├── drl/                       # 核心 DRL 模块
-│   ├── config.py              # 配置 dataclass
+│   ├── config.py              # 配置 dataclass（含 GPU 扩展字段）
 │   ├── config_loader.py       # YAML 配置加载
 │   ├── models.py              # Actor-Critic 模型
-│   ├── ray_components.py      # Ray 分布式组件
+│   ├── ray_components.py      # Ray 分布式组件（Learner 声明 num_gpus=1）
 │   ├── logging_utils.py       # 日志工具
 │   └── video_generator.py     # 视频生成
 ├── config/                    # 配置文件
@@ -109,9 +117,13 @@ DRL_MuJoCo/
 │   ├── walker2d.yaml          # Walker2d 分布式配置
 │   ├── walker2d_single.yaml   # Walker2d 单机配置
 │   ├── halfcheetah.yaml       # HalfCheetah 分布式配置
-│   └── halfcheetah_single.yaml # HalfCheetah 单机配置
+│   ├── halfcheetah_single.yaml # HalfCheetah 单机配置
+│   └── scaling/               # 🆕 GPU 扩展实验配置（自动生成）
+│       ├── hopper_gpu4.yaml
+│       ├── hopper_gpu8.yaml
+│       └── ...
 ├── web/                       # Web UI
-│   ├── server.py              # FastAPI 后端
+│   ├── server.py              # FastAPI 后端（🆕 GPU 扩展 + 集群 API）
 │   ├── next.config.ts         # Next.js 配置
 │   ├── tailwind.config.ts     # Tailwind 主题配置
 │   └── src/
@@ -133,14 +145,19 @@ DRL_MuJoCo/
 │   ├── start.sh               # 交互式启动器
 │   ├── plot_training.py       # 训练曲线
 │   ├── plot_comparison.py     # 对比曲线
-│   └── slurm/                 # 🆕 Slurm 集群脚本
-│       ├── setup_env.sh       #   Conda 环境创建
+│   ├── gen_scaling_configs.py # 🆕 生成 GPU 扩展配置
+│   ├── analyze_scaling.py     # 🆕 GPU 扩展结果分析
+│   └── slurm/                 # Slurm 集群脚本
+│       ├── setup_env.sh       #   Conda 环境创建 + 前端构建
+│       ├── run_webui.sh       #   🆕 Web UI (Slurm 计算节点)
 │       ├── run_single.sh      #   单机训练 sbatch
 │       ├── run_distributed.sh #   分布式训练 sbatch
 │       ├── run_all_envs.sh    #   批量提交 3环境×2模式
+│       ├── run_scaling.sh     #   🆕 GPU 扩展实验 sbatch
+│       ├── run_gpu_experiments.sh # 🆕 一键批量 GPU 对比实验
 │       ├── run_plot.sh        #   训练后绘图
 │       └── monitor.sh         #   作业监控工具
-└── logs/                      # 🆕 Slurm 日志目录
+└── logs/                      # Slurm 日志目录
 ```
 
 ---
@@ -226,15 +243,18 @@ scripts\start.bat
 | `env_name` | `Hopper-v5` | MuJoCo 环境名称 |
 | `num_actors` | `8` | 并行采样器数量 |
 | `rollout_length` | `2048` | 单次采样轨迹长度 |
-| `batch_size` | `64` | 训练批次大小 |
+| `batch_size` | `256` | 训练批次大小 |
 | `lr` | `0.0003` | 学习率 |
 | `gamma` | `0.99` | 折扣因子 |
 | `gae_lambda` | `0.95` | GAE λ 参数 |
-| `clip_ratio` | `0.2` | PPO 裁剪比率 |
-| `hidden_sizes` | `[64, 64]` | 隐藏层大小 |
-| `max_iters` | `3000` | 最大训练迭代数 |
+| `clip_ratio` | `0.15` | PPO 裁剪比率 |
+| `hidden_sizes` | `[256, 256]` | 隐藏层大小 |
+| `max_iters` | `1000` | 最大训练迭代数 |
 | `lr_schedule` | `linear` | 学习率调度策略 |
-| `target_kl` | `0.02` | KL 散度早停阈值 |
+| `target_kl` | `0.015` | KL 散度早停阈值 |
+| `num_gpus` | `1` | 🆕 GPU 数量（每个 GPU 运行一个 Learner） |
+| `actors_per_gpu` | `8` | 🆕 每 GPU 分配的 Actor 数量 |
+| `param_sync_interval` | `1` | 🆕 多 Learner 参数同步间隔 |
 
 ---
 
@@ -361,6 +381,8 @@ maturin develop --release
 
 ## 🏛️ 架构概览
 
+### 单 GPU 架构（默认）
+
 ```
 ┌─────────────────────────────────────────────────────────┐
 │                     Next.js Frontend                     │
@@ -399,11 +421,34 @@ maturin develop --release
 └──────────────────────────────────────────────────────────┘
 ```
 
+### 🆕 多 GPU 扩展架构（GPU=4 示例）
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        FastAPI Backend                          │
+│              /api/scaling/*  /api/cluster/info                  │
+└───────────────────────────┬─────────────────────────────────────┘
+                            │
+┌───────────────────────────┼─────────────────────────────────────┐
+│                     Ray Cluster                                │
+│                                                                │
+│  ┌─ Learner₀ (GPU:0) ←→ [Actor₀..Actor₇]   ← 8 CPU Actors   │
+│  ├─ Learner₁ (GPU:1) ←→ [Actor₈..Actor₁₅]                    │
+│  ├─ Learner₂ (GPU:2) ←→ [Actor₁₆..Actor₂₃]                   │
+│  └─ Learner₃ (GPU:3) ←→ [Actor₂₄..Actor₃₁]                   │
+│                                                                │
+│  共享: ParameterServer (周期性参数平均)                         │
+│  独立: 每个 Learner 有自己的 ReplayBuffer                      │
+└────────────────────────────────────────────────────────────────┘
+```
+
+每个 Learner 独占 1 块 GPU + 8 个 CPU Actor 采样。通过 ParameterServer 每轮参数平均（Parameter Averaging）保持所有 Learner 的策略一致。
+
 ---
 
 ## 🖥️ Slurm 集群使用指南
 
-项目提供了完整的 Slurm 集群训练脚本，支持在 GPU 集群上提交分布式/单机训练作业。
+项目提供了完整的 Slurm 集群训练脚本，支持在 GPU 集群上提交分布式/单机训练作业，以及 **🆕 Web UI 交互式训练** 和 **🆕 多 GPU 扩展实验**。
 
 ### 第一步：上传项目到集群
 
@@ -432,52 +477,104 @@ bash scripts/slurm/setup_env.sh
 > ```
 > 如果是 CUDA 12.1，需先编辑 `scripts/slurm/setup_env.sh` 将 `cu118` 改为 `cu121`。
 
-这一步完成后，`drl_mujoco` Conda 环境就创建好了，**以后不需要再运行**。
+这一步完成后，`drl_mujoco` Conda 环境和 Next.js 前端就构建好了，**以后不需要再运行**。
 
-### 第四步：提交训练作业
+### 方式一：Web UI 交互式训练（推荐）
 
-**方式 A — 单独提交一个任务**：
+在计算节点上启动 Web UI，通过 SSH 端口转发在本地浏览器中访问：
 
 ```bash
-# 单机模式（Hopper，默认配置）
+# 提交 Web UI 作业（1 GPU 基础模式）
+sbatch scripts/slurm/run_webui.sh
+
+# 提交 Web UI 作业（4 GPU 扩展模式）
+sbatch --gres=gpu:4 --cpus-per-task=40 --mem=64G scripts/slurm/run_webui.sh
+
+# 查看日志获取连接命令
+cat logs/webui_<JOBID>.out
+```
+
+日志中会显示 SSH 端口转发命令，在本地终端执行：
+
+```bash
+ssh -N -L 8000:<计算节点>:8000 <用户名>@<集群管理节点>
+```
+
+然后浏览器打开 **http://localhost:8000** 即可使用 Web UI：
+- 🎮 一键启动/停止训练
+- 📡 实时监控训练曲线
+- 🆕 查看集群 GPU 信息
+- 🆕 启动 GPU 扩展实验
+
+### 方式二：命令行提交训练作业
+
+**单独提交一个任务**：
+
+```bash
+# 单机模式
 sbatch scripts/slurm/run_single.sh
 
-# 分布式模式（Hopper，默认配置）
+# 分布式模式
 sbatch scripts/slurm/run_distributed.sh
 
 # 指定其他环境配置
 sbatch scripts/slurm/run_single.sh config/walker2d_single.yaml
 sbatch scripts/slurm/run_distributed.sh config/walker2d.yaml
-sbatch scripts/slurm/run_single.sh config/halfcheetah_single.yaml
-sbatch scripts/slurm/run_distributed.sh config/halfcheetah.yaml
 ```
 
-**方式 B — 一键批量提交全部 6 个任务（推荐）**：
+**一键批量提交全部 6 个任务**：
 
 ```bash
-# 先用 --dry-run 预览会提交什么
-bash scripts/slurm/run_all_envs.sh --dry-run
-
-# 确认无误后实际提交
-bash scripts/slurm/run_all_envs.sh
+bash scripts/slurm/run_all_envs.sh --dry-run   # 预览
+bash scripts/slurm/run_all_envs.sh              # 提交
 ```
 
-这会自动提交：Hopper / Walker2d / HalfCheetah × 单机/分布式 = 6 个作业。
+### 🆕 方式三：GPU 扩展性对比实验
 
-### 第五步：监控训练进度
+支持 4/8/16/32 GPU 的扩展性对比实验：
+
+```bash
+# 1. 生成缩放配置（自动缩放 actors、batch_size、buffer）
+python scripts/gen_scaling_configs.py --gpu_counts 4 8 16 32
+
+# 2. 预览实验
+bash scripts/slurm/run_gpu_experiments.sh --dry-run
+
+# 3. 提交全部实验
+bash scripts/slurm/run_gpu_experiments.sh
+
+# 4. 也可以只跑部分实验
+bash scripts/slurm/run_gpu_experiments.sh --envs hopper --gpus 4 8
+
+# 5. 分析结果
+python scripts/analyze_scaling.py --input_dir output/scaling
+```
+
+**GPU 扩展资源缩放对照表**：
+
+| GPU 数量 | 节点数 (每节点 4 GPU) | Actors 总数 | batch_size | CPU 核心 | 内存 |
+|:--------:|:--------------------:|:-----------:|:----------:|:--------:|:----:|
+| 4 | 1 | 32 | 2048 | 40 | 64G |
+| 8 | 2 | 64 | 4096 | 40/节点 | 64G/节点 |
+| 16 | 4 | 128 | 8192 | 40/节点 | 64G/节点 |
+| 32 | 8 | 256 | 16384 | 40/节点 | 64G/节点 |
+
+> ⚠️ `run_gpu_experiments.sh` 中的 `GPUS_PER_NODE=4` 需根据实际集群修改。
+
+### 监控训练进度
 
 ```bash
 # 查看所有作业状态
 bash scripts/slurm/monitor.sh
 
-# 实时查看某个作业的日志（用 squeue 获取 JOB_ID）
+# 实时查看某个作业的日志
 bash scripts/slurm/monitor.sh <JOB_ID>
 
 # 取消所有作业
 bash scripts/slurm/monitor.sh --cancel-all
 ```
 
-### 第六步：训练完成后绘图
+### 训练完成后绘图
 
 ```bash
 # 绘制全部图表
@@ -495,25 +592,45 @@ sbatch scripts/slurm/run_plot.sh --comparison   # 多环境对比图
 | `run_single.sh` | 4 | 8G | 1 | 7天 | 单机 1 Actor + 1 Learner |
 | `run_distributed.sh` | 12 | 32G | 1 | 7天 | 分布式 8 Actors + Ray 集群 |
 | `run_plot.sh` | 2 | 4G | 0 | 1小时 | 纯 CPU 绘图任务 |
+| 🆕 `run_webui.sh` | 16 | 32G | 1+ | 7天 | Web UI + 训练（可申请多 GPU） |
+| 🆕 `run_scaling.sh` | 16 | 32G | 1+ | 7天 | GPU 扩展实验（支持多节点） |
 
 ### 执行流程总结
 
 ```
 首次使用:
-  ① bash scripts/slurm/setup_env.sh        ← 仅需运行一次
+  ① bash scripts/slurm/setup_env.sh            ← 仅需运行一次
 
-每次训练:
-  ② sbatch scripts/slurm/run_single.sh     ← 提交单机训练
-     或
-     sbatch scripts/slurm/run_distributed.sh ← 提交分布式训练
-     或
-     bash scripts/slurm/run_all_envs.sh      ← 一键提交全部6个任务
+Web UI 模式 (交互式):
+  ② sbatch scripts/slurm/run_webui.sh          ← 提交 Web UI 作业
+  ③ ssh -N -L 8000:<node>:8000 user@gateway    ← 本地端口转发
+  ④ 浏览器打开 http://localhost:8000            ← 可视化操作
+
+命令行模式 (后台批量):
+  ② sbatch scripts/slurm/run_single.sh         ← 提交单机训练
+     或 sbatch scripts/slurm/run_distributed.sh ← 提交分布式训练
+     或 bash scripts/slurm/run_all_envs.sh      ← 一键提交全部6个任务
+
+GPU 扩展实验:
+  ② python scripts/gen_scaling_configs.py      ← 生成缩放配置
+  ③ bash scripts/slurm/run_gpu_experiments.sh  ← 一键提交对比实验
 
 训练中:
-  ③ bash scripts/slurm/monitor.sh           ← 监控作业
+  ⑤ bash scripts/slurm/monitor.sh              ← 监控作业
 
 训练后:
-  ④ sbatch scripts/slurm/run_plot.sh        ← 绘图
+  ⑥ sbatch scripts/slurm/run_plot.sh           ← 绘图
+  ⑦ python scripts/analyze_scaling.py          ← 🆕 分析 GPU 扩展结果
 ```
 
-> 日志文件自动写入 `logs/` 目录，格式为 `single_<JOBID>.out`、`dist_<JOBID>.out`、`plot_<JOBID>.out`。
+> 日志文件自动写入 `logs/` 目录，格式为 `single_<JOBID>.out`、`dist_<JOBID>.out`、`webui_<JOBID>.out`、`scale_<JOBID>.out`。
+
+### 🆕 Web UI 新增 API
+
+| 端点 | 方法 | 说明 |
+|:-----|:----:|------|
+| `/api/scaling/configs` | GET | 获取所有 GPU 扩展实验配置 |
+| `/api/scaling/metrics?config_name=hopper_gpu4` | GET | 获取扩展实验训练指标 |
+| `/api/scaling/start?config_name=hopper_gpu4` | POST | 启动 GPU 扩展实验 |
+| `/api/scaling/status` | GET | 获取扩展实验运行状态 |
+| `/api/cluster/info` | GET | 获取集群 GPU 信息 + Ray 资源 |
