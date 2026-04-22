@@ -31,7 +31,6 @@
 - **PPO 算法**：裁剪机制 + 自适应熵系数
 - **GAE**：广义优势估计
 - **自动设备选择**：CUDA → MPS → CPU
-- **🆕 多 GPU 扩展**：K Learners × M Actors，参数平均同步
 
 </td>
 <td width="50%">
@@ -64,12 +63,17 @@
 - 价值函数解释方差监控
 - Clip Fraction 实时追踪
 
-### 🆕 GPU 扩展实验
-- **多 Learner 并行**：每 GPU 独占 1 Learner + 8 Actors
-- **参数平均同步**：ParameterServer 周期性平均所有 Learner 参数
-- **自动缩放配置**：batch_size / buffer_capacity 随 GPU 数等比扩展
-- **Web UI 集成**：集群 GPU 信息展示 + 一键启动扩展实验
-- **批量实验提交**：4/8/16/32 GPU 一键对比实验
+</td>
+</tr>
+<tr>
+<td colspan="2">
+
+### 🆕 多 GPU 扩展实验
+- 🔥 **多 Learner 并行**：每 GPU 独占 1 Learner + 8 Actors，线性扩展吞吐
+- 🔄 **参数平均同步**：ParameterServer 周期性平均所有 Learner 参数，保持策略一致
+- 📐 **自动缩放配置**：`batch_size` / `buffer_capacity` 随 GPU 数等比扩展
+- 🖥️ **Web UI 集成**：集群 GPU 信息展示 + 一键启动扩展实验 + SSH 端口转发
+- 📦 **批量实验提交**：4 / 8 / 16 / 32 GPU 一键对比实验 + 结果汇总分析
 
 </td>
 </tr>
