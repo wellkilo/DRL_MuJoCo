@@ -159,6 +159,17 @@ def main() -> None:
     num_gpus = getattr(cfg, 'num_gpus', 1)
     actors_per_gpu = getattr(cfg, 'actors_per_gpu', 8)
     param_sync_interval = getattr(cfg, 'param_sync_interval', 1)
+
+    # 检测 Ray 集群中可用的 GPU 数量, 自动调整 num_gpus
+    ray_gpu_count = int(ray.cluster_resources().get("GPU", 0))
+    if ray_gpu_count > 0 and num_gpus > ray_gpu_count:
+        print(f"[Main] WARNING: Requested {num_gpus} GPUs but only {ray_gpu_count} available. "
+              f"Adjusting num_gpus={ray_gpu_count}", flush=True)
+        num_gpus = ray_gpu_count
+    elif ray_gpu_count == 0 and num_gpus > 1:
+        print(f"[Main] WARNING: No GPUs in Ray cluster, falling back to single Learner (CPU/MPS)", flush=True)
+        num_gpus = 1
+
     num_actors_total = num_gpus * actors_per_gpu
 
     print(f"[Main] Configuration: {num_gpus} GPUs × {actors_per_gpu} Actors/GPU = "
@@ -169,11 +180,16 @@ def main() -> None:
     global_state["param_server"] = param_server
     
     # 创建 K 个 Learner, 每个占 1 GPU + 自己的 ReplayBuffer
+    # 当 Ray 集群有 GPU 时, 使用 Learner.options(num_gpus=1).remote() 请求 GPU 资源
+    # 当没有 GPU 时, 使用 Learner.remote() 在 CPU/MPS 上运行
     learners = []
     buffers = []
     for g in range(num_gpus):
         buf = ReplayBuffer.remote(cfg.replay_buffer_capacity)
-        learner = Learner.remote(obs_dim, action_dim, buf, cfg.__dict__)
+        if ray_gpu_count > 0:
+            learner = Learner.options(num_gpus=1).remote(obs_dim, action_dim, buf, cfg.__dict__)
+        else:
+            learner = Learner.remote(obs_dim, action_dim, buf, cfg.__dict__)
         learners.append(learner)
         buffers.append(buf)
     

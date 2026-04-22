@@ -487,7 +487,7 @@ class MuJoCoActor:
         return traj, stats
 
 
-@ray.remote(num_gpus=1)
+@ray.remote
 class Learner:
     """
     Learner - 学习器
