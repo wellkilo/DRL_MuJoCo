@@ -14,7 +14,7 @@ class Config:
     包含所有可调超参数和运行配置
     """
     # ==================== 环境配置 ====================
-    env_name: str = "Hopper-v4"  # MuJoCo 环境名称
+    env_name: str = "Hopper-v5"  # MuJoCo 环境名称
 
     # ==================== 分布式配置 ====================
     num_actors: int = 8           # 并行 Actor 数量（分布式采样器）
@@ -54,3 +54,8 @@ class Config:
     lr_schedule: str = "linear"       # 学习率调度：'constant' 或 'linear'
     clip_ratio_value: float = 0.2    # 价值函数裁剪比率（防止价值预测剧变导致 GAE 失真）
     warmup_iters: int = 50           # 学习率 warmup 步数（防止初始大梯度不稳定）
+
+    # ==================== GPU 扩展配置 ====================
+    num_gpus: int = 1                # GPU 数量 (每个 GPU 运行一个 Learner)
+    actors_per_gpu: int = 8          # 每 GPU 分配的 Actor 数量
+    param_sync_interval: int = 1     # 多 Learner 参数平均间隔 (每 N 轮同步一次)

@@ -84,8 +84,25 @@ env.close()
 print('MuJoCo 环境测试通过!')
 "
 
+# ======================== 构建 Next.js 前端 ========================
+
+echo ""
+echo ">>> 构建 Next.js 前端..."
+if command -v npm &> /dev/null; then
+    cd "${PROJECT_DIR}/web"
+    [ ! -d "node_modules" ] && npm install
+    npm run build
+    cd "${PROJECT_DIR}"
+    echo "前端构建完成 (web/out/)"
+else
+    echo "npm 不可用, 请在本地执行以下命令后上传:"
+    echo "  cd web && npm install && npm run build"
+    echo "然后将 web/out/ 目录上传到集群"
+fi
+
 echo ""
 echo "=============================================="
 echo "  环境 ${ENV_NAME} 创建完成!"
 echo "  使用方式: conda activate ${ENV_NAME}"
+echo "  启动 Web UI: sbatch scripts/slurm/run_webui.sh"
 echo "=============================================="

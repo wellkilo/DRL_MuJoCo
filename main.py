@@ -1,5 +1,6 @@
 # DRL MuJoCo 分布式训练主程序
 # 实现基于 Ray 的 Actor-Learner 架构，支持并行采样和策略更新
+# 支持多 GPU 扩展：每个 GPU 运行一个 Learner，通过 ParameterServer 参数平均保持策略一致
 
 from __future__ import annotations
 
@@ -39,7 +40,7 @@ def save_model_and_exit(signum: int, frame: Any) -> None:
     try:
         if "learner" in global_state and "config_path" in global_state and "OUTPUT_DIR" in global_state:
             print(f"[Main] Getting model state from learner...", flush=True)
-            # 获取最终模型状态
+            # 获取最终模型状态（使用第一个 Learner 作为代表）
             final_state = ray.get(global_state["learner"].get_state.remote())
             print(f"[Main] Got model state, saving...", flush=True)
             
@@ -138,30 +139,69 @@ def main() -> None:
         traceback.print_exc()
         sys.exit(1)
 
-    # 初始化 Ray 集群（支持本地或分布式集群）
+    # ---- Ray 初始化 (支持集群模式) ----
     try:
-        ray.init(address=cfg.ray_address) if cfg.ray_address else ray.init()
+        if cfg.ray_address:
+            ray.init(address=cfg.ray_address)
+        elif os.environ.get("RAY_ADDRESS"):
+            ray.init(address=os.environ["RAY_ADDRESS"])
+        else:
+            ray.init()
     except Exception as e:
         print(f"[Main] FATAL: Failed to initialize Ray: {e}", flush=True)
         import traceback
         traceback.print_exc()
         sys.exit(1)
 
-    # 创建分布式核心组件
-    # 1. 经验回放缓冲区 - 存储所有 Actor 采集的经验
-    replay_buffer = ReplayBuffer.remote(cfg.replay_buffer_capacity)
-    # 2. 参数服务器 - 存储最新模型参数，供所有 Actor 拉取
+    print(f"[Main] Ray cluster resources: {ray.cluster_resources()}", flush=True)
+
+    # ---- 根据 num_gpus 创建多个 Learner ----
+    num_gpus = getattr(cfg, 'num_gpus', 1)
+    actors_per_gpu = getattr(cfg, 'actors_per_gpu', 8)
+    param_sync_interval = getattr(cfg, 'param_sync_interval', 1)
+
+    # 检测 Ray 集群中可用的 GPU 数量, 自动调整 num_gpus
+    ray_gpu_count = int(ray.cluster_resources().get("GPU", 0))
+    if ray_gpu_count > 0 and num_gpus > ray_gpu_count:
+        print(f"[Main] WARNING: Requested {num_gpus} GPUs but only {ray_gpu_count} available. "
+              f"Adjusting num_gpus={ray_gpu_count}", flush=True)
+        num_gpus = ray_gpu_count
+    elif ray_gpu_count == 0 and num_gpus > 1:
+        print(f"[Main] WARNING: No GPUs in Ray cluster, falling back to single Learner (CPU/MPS)", flush=True)
+        num_gpus = 1
+
+    num_actors_total = num_gpus * actors_per_gpu
+
+    print(f"[Main] Configuration: {num_gpus} GPUs × {actors_per_gpu} Actors/GPU = "
+          f"{num_actors_total} total Actors", flush=True)
+
+    # 共享 ParameterServer
     param_server = ParameterServer.remote()
     global_state["param_server"] = param_server
-    # 3. 学习器 - 负责从 ReplayBuffer 采样并更新模型
-    learner = Learner.remote(obs_dim, action_dim, replay_buffer, cfg.__dict__)
     
-    # 保存 learner 到全局状态，以便信号处理时可以访问
-    global_state["learner"] = learner
-
-    # 初始化：Learner 生成初始模型状态，同步到 ParameterServer
-    init_state = ray.get(learner.get_state.remote())
+    # 创建 K 个 Learner, 每个占 1 GPU + 自己的 ReplayBuffer
+    # 当 Ray 集群有 GPU 时, 使用 Learner.options(num_gpus=1).remote() 请求 GPU 资源
+    # 当没有 GPU 时, 使用 Learner.remote() 在 CPU/MPS 上运行
+    learners = []
+    buffers = []
+    for g in range(num_gpus):
+        buf = ReplayBuffer.remote(cfg.replay_buffer_capacity)
+        if ray_gpu_count > 0:
+            learner = Learner.options(num_gpus=1).remote(obs_dim, action_dim, buf, cfg.__dict__)
+        else:
+            learner = Learner.remote(obs_dim, action_dim, buf, cfg.__dict__)
+        learners.append(learner)
+        buffers.append(buf)
+    
+    global_state["learner"] = learners[0]  # 信号处理用第一个 Learner
+    
+    # 初始化: 用第一个 Learner 的参数同步到 PS
+    init_state = ray.get(learners[0].get_state.remote())
     ray.get(param_server.set.remote(init_state))
+    
+    # 将初始参数同步到所有 Learner
+    for learner in learners[1:]:
+        ray.get(learner.set_state.remote(init_state))
     
     # 立即保存初始模型，确保即使训练很快停止也有模型文件
     print(f"[Main] Saving initial model...", flush=True)
@@ -170,8 +210,20 @@ def main() -> None:
     torch.save({"actor": init_state, "obs_rms_state": None}, model_path)
     print(f"[Main] Initial model saved to {model_path}", flush=True)
 
-    # 创建多个 Actor 并行采集经验
-    actors = [MuJoCoActor.remote(cfg.env_name, i, cfg.seed, cfg.hidden_sizes) for i in range(cfg.num_actors)]
+    # 创建 Actors: 每个 Learner 分配 actors_per_gpu 个
+    all_actors = []
+    actor_to_learner = {}   # actor handle id → learner_index 映射
+    actor_to_buffer = {}    # actor handle id → buffer 映射
+    for g in range(num_gpus):
+        for a in range(actors_per_gpu):
+            actor_id = g * actors_per_gpu + a
+            actor = MuJoCoActor.remote(cfg.env_name, actor_id, cfg.seed, cfg.hidden_sizes)
+            all_actors.append(actor)
+            actor_to_learner[id(actor)] = g
+            actor_to_buffer[id(actor)] = buffers[g]
+
+    print(f"[Main] Created {num_gpus} Learners × {actors_per_gpu} Actors = "
+          f"{num_actors_total} total Actors", flush=True)
 
     # 从 ParameterServer 获取初始参数
     init_params = ray.get(param_server.get.remote())
@@ -180,10 +232,10 @@ def main() -> None:
     init_obs_rms = ray.get(param_server.get_obs_rms.remote())
 
     # 启动所有 Actor 进行第一次采样
-    # actor_tasks 字典维护：Ray任务ID -> Actor句柄 的映射
-    actor_tasks: dict[ray.ObjectRef, ray.actor.ActorHandle] = {
-        actor.sample.remote(init_params, cfg.rollout_length, cfg.gamma, cfg.gae_lambda, init_obs_rms): actor for actor in actors
-    }
+    actor_tasks: dict[ray.ObjectRef, ray.actor.ActorHandle] = {}
+    for actor in all_actors:
+        task = actor.sample.remote(init_params, cfg.rollout_length, cfg.gamma, cfg.gae_lambda, init_obs_rms)
+        actor_tasks[task] = actor
 
     # 准备训练指标输出文件
     metrics_path = Path(cfg.metrics_path)
@@ -213,11 +265,12 @@ def main() -> None:
             "explained_var", # 价值函数的解释方差
             "grad_norm",   # 梯度范数
             "lr",          # 当前学习率
+            "num_gpus",    # GPU 数量
         ],
     )
     metrics_writer.writeheader()
 
-    # 训练主循环 - On-policy PPO（标准同步流程）
+    # 训练主循环 - 多 Learner 并行训练
     start_time = time.time()
     total_steps = 0          # 总采样步数
     total_episodes = 0        # 总回合数
@@ -225,18 +278,13 @@ def main() -> None:
     recent_returns = deque(maxlen=100)  # 滑动窗口追踪最近 100 个 episode 的回报
     best_avg_return = -float('inf')  # 最佳平均回报
     
-    # 目标样本数量：所有 Actor 各采集一个 rollout_length 的数据
-    target_samples = cfg.num_actors * cfg.rollout_length
-    
     for train_step in range(cfg.max_iters):
         # 阶段1：等待所有 Actor 完成采样（同步收集）
-        print(f"[Main] Train step {train_step}: Collecting samples...", flush=True)
+        print(f"[Main] Train step {train_step}: Collecting samples from "
+              f"{num_actors_total} Actors...", flush=True)
         done_ids, _ = ray.wait(list(actor_tasks.keys()), num_returns=len(actor_tasks))
 
-        # 获取当前模型参数
-        current_params = ray.get(param_server.get.remote())
-
-        # 批量获取所有结果（减少通信开销）
+        # 批量获取所有结果
         results = ray.get(done_ids)
         
         # 收集所有 Actor 的 obs_rms 统计量
@@ -245,10 +293,11 @@ def main() -> None:
         # 处理所有已完成的采样任务
         for done_id, (traj, stats) in zip(done_ids, results):
             actor = actor_tasks.pop(done_id)
+            buf = actor_to_buffer[id(actor)]
 
-            # 将轨迹存入数据存储
+            # 将轨迹存入对应的 ReplayBuffer
             if traj:
-                ray.get(replay_buffer.add.remote(traj))
+                ray.get(buf.add.remote(traj))
 
             # 收集 Actor 的观测归一化统计量
             if "obs_rms_state" in stats:
@@ -276,40 +325,61 @@ def main() -> None:
             if merged_obs_rms is not None:
                 ray.get(param_server.update_obs_rms.remote(merged_obs_rms))
 
-        # 阶段2：进行一次完整的 on-policy 学习更新
-        size = ray.get(replay_buffer.size.remote())
-        
-        # Learner 进行多轮梯度更新
-        train_out = ray.get(learner.train_step.remote(cfg.learner_updates_per_iter))
+        # 阶段2：所有 Learner 并行训练
+        train_futures = [
+            learner.train_step.remote(cfg.learner_updates_per_iter)
+            for learner in learners
+        ]
+        train_results = ray.get(train_futures)  # 所有 Learner 并行训练完成
 
-        # 直接使用 train_out 中的参数，避免冗余 RPC
-        current_params = train_out["state_dict"]
-        # 将更新后的模型参数同步到 ParameterServer（保持一致性）
-        ray.get(param_server.set.remote(current_params))
+        # 阶段3：参数平均 → 同步到 PS → 同步到所有 Learner
+        all_state_dicts = [tr["state_dict"] for tr in train_results]
+        
+        if num_gpus > 1 and (train_step % param_sync_interval == 0):
+            # 多 Learner: 参数平均
+            avg_params = ray.get(
+                param_server.average_and_set.remote(all_state_dicts)
+            )
+            # 将平均后的参数同步回每个 Learner
+            sync_futures = [
+                learner.set_state.remote(avg_params) for learner in learners
+            ]
+            ray.get(sync_futures)
+        else:
+            # 单 Learner 或非同步轮: 直接设置
+            avg_params = all_state_dicts[0]
+            ray.get(param_server.set.remote(avg_params))
 
         # ===== 关键优化：先发起 Actor 采样，再做保存等操作 =====
-        # 这样 Actor 采样和模型保存/日志记录可以并行执行
         current_obs_rms = ray.get(param_server.get_obs_rms.remote())
-        actor_tasks = {
-            actor.sample.remote(current_params, cfg.rollout_length, cfg.gamma, cfg.gae_lambda, current_obs_rms): actor
-            for actor in actors
-        }
+        actor_tasks = {}
+        for actor in all_actors:
+            task = actor.sample.remote(avg_params, cfg.rollout_length, cfg.gamma, cfg.gae_lambda, current_obs_rms)
+            actor_tasks[task] = actor
 
-        # ===== 阶段3：日志和模型保存（此时 Actor 已经在并行采样） =====
+        # ===== 阶段4：日志和模型保存（此时 Actor 已经在并行采样） =====
+        # 使用第一个 Learner 的 metrics 作为代表
+        metrics_0 = train_results[0]["metrics"]
         elapsed = time.time() - start_time
         sps = total_steps / elapsed if elapsed > 0 else 0.0
         avg_return = sum(recent_returns) / len(recent_returns) if recent_returns else math.nan
+        
+        # 获取总 buffer 大小
+        total_buffer_size = 0
+        for buf in buffers:
+            total_buffer_size += ray.get(buf.size.remote())
+
         log_event(
             "learner_update",
             {
                 "step": train_step,
-                "buffer_size": size,
+                "buffer_size": total_buffer_size,
                 "elapsed_sec": elapsed,
                 "total_steps": total_steps,
                 "sps": sps,
                 "episodes": total_episodes,
                 "avg_return": avg_return,
-                **train_out["metrics"],
+                **metrics_0,
             },
         )
         metrics_writer.writerow(
@@ -320,32 +390,33 @@ def main() -> None:
                 "sps": sps,
                 "episodes": total_episodes,
                 "avg_return": avg_return,
-                "buffer_size": size,
-                "loss": train_out["metrics"].get("loss", math.nan),
-                "policy_loss": train_out["metrics"].get("policy_loss", math.nan),
-                "value_loss": train_out["metrics"].get("value_loss", math.nan),
-                "entropy": train_out["metrics"].get("entropy", math.nan),
-                "ratio": train_out["metrics"].get("ratio", math.nan),
-                "approx_kl": train_out["metrics"].get("approx_kl", math.nan),
-                "clip_fraction": train_out["metrics"].get("clip_fraction", math.nan),
-                "explained_var": train_out["metrics"].get("explained_var", math.nan),
-                "grad_norm": train_out["metrics"].get("grad_norm", math.nan),
-                "lr": train_out["metrics"].get("lr", math.nan),
+                "buffer_size": total_buffer_size,
+                "loss": metrics_0.get("loss", math.nan),
+                "policy_loss": metrics_0.get("policy_loss", math.nan),
+                "value_loss": metrics_0.get("value_loss", math.nan),
+                "entropy": metrics_0.get("entropy", math.nan),
+                "ratio": metrics_0.get("ratio", math.nan),
+                "approx_kl": metrics_0.get("approx_kl", math.nan),
+                "clip_fraction": metrics_0.get("clip_fraction", math.nan),
+                "explained_var": metrics_0.get("explained_var", math.nan),
+                "grad_norm": metrics_0.get("grad_norm", math.nan),
+                "lr": metrics_0.get("lr", math.nan),
+                "num_gpus": num_gpus,
             }
         )
         metrics_file.flush()  # 立即写入文件
         
-        # 保存模型（直接用 train_out 中的 state_dict，无需再 ray.get(learner.get_state)）
+        # 保存模型（直接用 avg_params，无需再 ray.get(learner.get_state)）
         try:
             model_path = OUTPUT_DIR / f"model_{config_name}.pt"
-            torch.save({"actor": current_params, "obs_rms_state": current_obs_rms}, model_path)
+            torch.save({"actor": avg_params, "obs_rms_state": current_obs_rms}, model_path)
             
             # 检查是否为最佳模型，如果是则保存
             if not math.isnan(avg_return) and avg_return > best_avg_return:
                 best_avg_return = avg_return
                 global_state["best_avg_return"] = best_avg_return
                 best_model_path = OUTPUT_DIR / f"model_{config_name}_best.pt"
-                torch.save({"actor": current_params, "obs_rms_state": current_obs_rms}, best_model_path)
+                torch.save({"actor": avg_params, "obs_rms_state": current_obs_rms}, best_model_path)
                 print(f"[Main] Best model: avg_return={best_avg_return:.2f}", flush=True)
         except Exception as e:
             print(f"[Main] Error saving model: {e}", flush=True)
@@ -354,12 +425,13 @@ def main() -> None:
         if train_step % 10 == 0:
             print(
                 f"[Main] Step {train_step}/{cfg.max_iters} | "
-                f"avg_return={avg_return:.1f} | steps={total_steps:,} | SPS={sps:.0f}",
+                f"avg_return={avg_return:.1f} | steps={total_steps:,} | SPS={sps:.0f} | "
+                f"GPUs={num_gpus}",
                 flush=True
             )
 
     # 训练结束，保存模型（包含 obs_rms 统计量）
-    final_state = ray.get(learner.get_state.remote())
+    final_state = ray.get(learners[0].get_state.remote())
     final_obs_rms = ray.get(param_server.get_obs_rms.remote())
     config_name = Path(config_path).stem
     model_path = OUTPUT_DIR / f"model_{config_name}.pt"
