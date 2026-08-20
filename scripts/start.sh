@@ -86,7 +86,7 @@ case $choice in
         cd "$REPO_ROOT/web"
         if [ ! -d "node_modules" ]; then
             echo "Installing npm dependencies..."
-            npm install
+            npm ci
         fi
         echo "Launching Next.js Dev Server + Web UI..."
         echo "Open your browser and go to: http://localhost:3000"

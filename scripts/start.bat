@@ -86,7 +86,7 @@ if "!choice!"=="1" (
     cd /d "%REPO_ROOT%\web"
     if not exist "node_modules" (
         echo Installing npm dependencies...
-        call npm install
+        call npm ci
     )
     echo Launching Next.js Dev Server + Web UI...
     echo Open your browser and go to: http://localhost:3000

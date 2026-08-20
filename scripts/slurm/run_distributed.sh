@@ -18,15 +18,25 @@
 #SBATCH --time=7-00:00:00
 #SBATCH --partition=debug
 
+set -uo pipefail
+
 # ======================== 环境配置 ========================
 
-source /nfs/software/miniconda3/bin/activate
-conda activate drl_mujoco
+CONDA_BASE="${CONDA_BASE:-/nfs/software/miniconda3}"
+[ -f "${CONDA_BASE}/etc/profile.d/conda.sh" ] || { echo "[FATAL] 未找到 Conda: ${CONDA_BASE}"; exit 1; }
+# shellcheck disable=SC1091
+source "${CONDA_BASE}/etc/profile.d/conda.sh"
+conda activate drl_mujoco || exit 1
 
 # ======================== 变量定义 ========================
 
-PROJECT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
-cd "${PROJECT_DIR}"
+if [ -n "${SLURM_SUBMIT_DIR:-}" ]; then
+    PROJECT_DIR="${SLURM_SUBMIT_DIR}"
+else
+    PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+fi
+cd "${PROJECT_DIR}" || exit 1
+[ -f "main.py" ] || { echo "[FATAL] 请在项目根目录提交 sbatch 作业"; exit 1; }
 
 CONFIG_FILE="${1:-config/config.yaml}"
 
@@ -41,6 +51,14 @@ export RAY_NUM_CPUS=${SLURM_CPUS_PER_TASK:-12}
 # Ray 临时目录 (避免写入 /tmp 导致空间或权限问题)
 export RAY_TMPDIR="${PROJECT_DIR}/.ray_tmp_${SLURM_JOB_ID}"
 mkdir -p "${RAY_TMPDIR}"
+cleanup() {
+    if [[ -n "${RAY_TMPDIR:-}" && "${RAY_TMPDIR}" == "${PROJECT_DIR}/.ray_tmp_"* ]]; then
+        rm -rf -- "${RAY_TMPDIR}"
+    fi
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 # 禁用 Ray Dashboard (集群环境下通常无法访问)
 export RAY_DISABLE_DASHBOARD=1
@@ -82,10 +100,7 @@ EXIT_CODE=$?
 
 # ======================== 清理 ========================
 
-if [ -d "${RAY_TMPDIR}" ]; then
-    rm -rf "${RAY_TMPDIR}"
-    echo "已清理 Ray 临时目录: ${RAY_TMPDIR}"
-fi
+echo "Ray 临时目录将在退出时清理: ${RAY_TMPDIR}"
 
 echo ""
 echo "=============================================="

@@ -17,6 +17,12 @@ import ray
 import torch
 
 from drl.models import ActorCritic
+from drl.rollout_utils import (
+    compute_batch_moments,
+    compute_gae,
+    merge_rms_states,
+    prepare_action,
+)
 from drl.running_mean_std import RunningMeanStd
 
 
@@ -33,30 +39,7 @@ def _merge_obs_rms_states(states: list[dict[str, Any]]) -> dict[str, Any] | None
     Returns:
         合并后的 obs_rms 状态字典，或 None（如果输入为空或全部无效）
     """
-    # 过滤无效状态（含 NaN/inf 的 mean 或 var）
-    valid_states = [
-        s for s in states
-        if s is not None
-        and np.all(np.isfinite(s["mean"]))
-        and np.all(np.isfinite(s["var"]))
-    ]
-
-    if not valid_states:
-        return None
-    if len(valid_states) == 1:
-        return valid_states[0]
-
-    # 使用第一个状态作为基础，逐个合并
-    merged = RunningMeanStd(shape=valid_states[0]["mean"].shape)
-    merged.set_state(valid_states[0])
-
-    for state in valid_states[1:]:
-        other = RunningMeanStd(shape=state["mean"].shape)
-        other.set_state(state)
-        # 使用修复后的 _update_from_moments（内含 count 上限保护和 var 安全检查）
-        merged._update_from_moments(other.mean, other.var, other.count)
-
-    return merged.get_state()
+    return merge_rms_states(states)
 
 
 @ray.remote
@@ -108,8 +91,8 @@ class ParameterServer:
         return self._state_dict
 
     def update_obs_rms(self, obs_rms_state: dict[str, Any]) -> None:
-        """更新观测归一化统计量"""
-        self._obs_rms_state = obs_rms_state
+        """把本轮新增观测 moments 合并进全局统计量。"""
+        self._obs_rms_state = merge_rms_states([self._obs_rms_state, obs_rms_state])
 
     def get_obs_rms(self) -> dict[str, Any] | None:
         """获取观测归一化统计量"""
@@ -288,6 +271,7 @@ class MuJoCoActor:
         # 修改：增大种子间隔以提高数据多样性
         actor_seed = seed + actor_id * 10000
         self.rng = np.random.default_rng(actor_seed)
+        torch.manual_seed(actor_seed)
         obs, _ = self.env.reset(seed=int(actor_seed))
 
         # 获取环境空间维度
@@ -352,11 +336,14 @@ class MuJoCoActor:
         traj: list[dict[str, Any]] = []  # 轨迹数据
         values: list[float] = []          # 价值函数值
         rewards: list[float] = []         # 奖励
-        dones: list[float] = []          # 是否结束
+        terminations: list[bool] = []    # 是否自然终止（不应 bootstrap）
+        episode_ends: list[bool] = []    # 是否结束当前 episode（终止或截断）
+        truncated_bootstrap_values: list[float | None] = []
 
         # 统计信息
         episodes = 0             # 完成的回合数
         episode_return_sum = 0.0  # 累计回报
+        episode_returns: list[float] = []
         episode_len_sum = 0       # 累计长度
         ep_return = 0.0          # 当前回合回报
         ep_len = 0               # 当前回合长度
@@ -379,34 +366,53 @@ class MuJoCoActor:
                 # 计算动作的对数概率
                 logp_t = dist.log_prob(action_t).sum(axis=-1)
 
-            # 将动作转换为 numpy 并裁剪到合法范围
+            # 策略动作保留给 PPO 计算；环境动作单独裁剪到合法范围。
             action = action_t.squeeze(0).cpu().numpy()
-            action_clipped = np.clip(action, self.action_low, self.action_high)
+            policy_action, env_action = prepare_action(
+                action, self.action_low, self.action_high
+            )
 
             # 执行动作并获得环境反馈
-            next_obs, reward, terminated, truncated, _ = self.env.step(action_clipped)
-            done = bool(terminated or truncated)
+            next_obs, reward, terminated, truncated, _ = self.env.step(env_action)
+            episode_end = bool(terminated or truncated)
+
+            # TimeLimit 等外部截断仍需从 next_obs bootstrap；自然终止则不需要。
+            truncated_bootstrap_value: float | None = None
+            if truncated and not terminated:
+                next_obs_normalized = self.obs_rms.normalize(
+                    np.asarray(next_obs, dtype=np.float32)
+                )
+                next_obs_t = torch.as_tensor(
+                    next_obs_normalized, dtype=torch.float32
+                ).unsqueeze(0)
+                with torch.no_grad():
+                    _, truncated_value_t = self.model.get_dist_and_value(next_obs_t)
+                truncated_bootstrap_value = float(truncated_value_t.item())
 
             # ===== 新增：奖励归一化 =====
             # 用折扣回报的 running std 来缩放奖励（不减 mean，只除以 std）
             raw_reward = float(reward)
-            self._discounted_return = self._discounted_return * gamma * (1.0 - float(done)) + raw_reward
+            self._discounted_return = (
+                self._discounted_return * gamma * (1.0 - float(episode_end)) + raw_reward
+            )
             self.ret_rms.update(np.array([[self._discounted_return]]))
             reward_std = np.sqrt(self.ret_rms.var[0] + 1e-8)
             normalized_reward = np.clip(raw_reward / reward_std, -10.0, 10.0)
 
-            # 保存轨迹数据（存储归一化后的观测值 + 价值估计用于 Value Clipping）
+            # 保存策略实际采样的原始动作，确保训练时重算的 log-prob 与旧值一致。
             traj.append(
                 {
                     "obs": obs_normalized,  # 归一化后的观测值
-                    "act": np.asarray(action_clipped, dtype=np.float32),
+                    "act": policy_action,
                     "logp": float(logp_t.item()),
                     "value": float(value_t.item()),  # 旧价值估计，用于 Value Function Clipping
                 }
             )
             values.append(float(value_t.item()))
             rewards.append(float(normalized_reward))  # 改：使用归一化后的奖励训练
-            dones.append(float(done))
+            terminations.append(bool(terminated))
+            episode_ends.append(episode_end)
+            truncated_bootstrap_values.append(truncated_bootstrap_value)
 
             # 更新当前回合统计（仍用原始奖励，保持 avg_return 含义不变）
             ep_return += raw_reward
@@ -414,9 +420,10 @@ class MuJoCoActor:
             self._obs = next_obs
 
             # 如果回合结束，重置环境
-            if done:
+            if episode_end:
                 episodes += 1
                 episode_return_sum += ep_return
+                episode_returns.append(ep_return)
                 episode_len_sum += ep_len
                 # 使用新的随机种子重置环境
                 obs, _ = self.env.reset(seed=int(self.rng.integers(0, 2**31 - 1)))
@@ -425,11 +432,8 @@ class MuJoCoActor:
                 ep_len = 0
                 self._discounted_return = 0.0  # 新增：重置折扣回报
 
-        # 更新观测归一化统计量（使用原始观测值）
-        if raw_obs_list:
-            self.obs_rms.update(np.stack(raw_obs_list, axis=0))
-
-        # 获取最后一个状态的价值估计（使用归一化观测）
+        # 获取 rollout 边界处的价值估计。观测归一化在整个 rollout 内保持固定，
+        # 避免同一批轨迹使用两套统计量。
         with torch.no_grad():
             raw_last_obs = np.asarray(self._obs, dtype=np.float32)
             last_obs_normalized = self.obs_rms.normalize(raw_last_obs)
@@ -437,39 +441,17 @@ class MuJoCoActor:
             _, last_value = self.model.get_dist_and_value(obs_t)
         last_value = float(last_value.item())
 
-        # 如果最后一个状态是终止状态，其价值为 0
-        if dones and dones[-1] >= 1.0:
-            last_value = 0.0
 
-        # 计算 GAE（广义优势估计）和回报
-        advs: list[float] = []  # 优势函数
-        rets: list[float] = []  # 回报值
-        gae = 0.0  # GAE 累积值
-
-        # 从后向前计算 GAE
-        for i in reversed(range(len(traj))):
-            # 下一个状态的值
-            if dones[i] >= 1.0:
-                next_value = 0.0
-            else:
-                next_value = last_value if i == len(traj) - 1 else values[i + 1]
-
-            # TD 误差
-            delta = rewards[i] + gamma * (1.0 - dones[i]) * next_value - values[i]
-
-            # GAE 递归公式
-            gae = delta + gamma * gae_lambda * (1.0 - dones[i]) * gae
-
-            # 优势 = GAE，回报 = 优势 + 价值
-            adv = gae
-            ret = adv + values[i]
-
-            advs.append(adv)
-            rets.append(ret)
-
-        # 反转列表使其按时间顺序排列
-        advs.reverse()
-        rets.reverse()
+        advs, rets = compute_gae(
+            rewards,
+            values,
+            terminations,
+            episode_ends,
+            truncated_bootstrap_values,
+            gamma=gamma,
+            gae_lambda=gae_lambda,
+            last_value=last_value,
+        )
 
         # 将优势和回报添加到轨迹数据中
         for idx in range(len(traj)):
@@ -477,12 +459,19 @@ class MuJoCoActor:
             traj[idx]["ret"] = float(rets[idx])
 
         # 返回轨迹和统计信息
+        obs_rms_moments = (
+            compute_batch_moments(np.stack(raw_obs_list, axis=0))
+            if raw_obs_list
+            else None
+        )
         stats = {
             "actor_id": self.actor_id,
             "episodes": episodes,
             "episode_return_sum": episode_return_sum,
+            "episode_returns": episode_returns,
             "episode_len_sum": episode_len_sum,
-            "obs_rms_state": self.obs_rms.get_state(),  # 返回更新后的归一化统计量
+            # 只返回本轮新增样本，避免每个 Actor 重复上报相同的全局历史。
+            "obs_rms_moments": obs_rms_moments,
         }
         return traj, stats
 

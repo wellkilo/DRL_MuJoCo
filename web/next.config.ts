@@ -17,28 +17,28 @@ const nextConfig: NextConfig = {
   images: {
     unoptimized: true,
   },
-  // Disable devtools to avoid Next.js 15.3+ bug:
-  // "Could not find the module segment-explorer-node.js#SegmentViewNode in the React Client Manifest"
-  devtools: false,
   outputFileTracingRoot: path.join(__dirname, '..'),
-  // 仅在非静态导出模式下生效：把 /api/* 与 /ws/* 代理到 FastAPI 8000
-  async rewrites() {
-    if (isExport) return [];
-    return [
-      {
-        source: '/api/:path*',
-        destination: 'http://127.0.0.1:8000/api/:path*',
-      },
-      {
-        source: '/ws/:path*',
-        destination: 'http://127.0.0.1:8000/ws/:path*',
-      },
-      {
-        source: '/output/:path*',
-        destination: 'http://127.0.0.1:8000/output/:path*',
-      },
-    ];
-  },
+  // 静态导出不能声明 rewrites；开发模式才注入 FastAPI 代理。
+  ...(!isExport
+    ? {
+        async rewrites() {
+          return [
+            {
+              source: '/api/:path*',
+              destination: 'http://127.0.0.1:8000/api/:path*',
+            },
+            {
+              source: '/ws/:path*',
+              destination: 'http://127.0.0.1:8000/ws/:path*',
+            },
+            {
+              source: '/output/:path*',
+              destination: 'http://127.0.0.1:8000/output/:path*',
+            },
+          ];
+        },
+      }
+    : {}),
 };
 
 export default nextConfig;

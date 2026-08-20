@@ -8,7 +8,11 @@
 #   bash scripts/slurm/monitor.sh --cancel-all # 取消所有自己的作业
 #===============================================================================
 
-if [ "$1" = "--cancel-all" ]; then
+set -u
+
+ARGUMENT="${1:-}"
+
+if [ "${ARGUMENT}" = "--cancel-all" ]; then
     echo ">>> 取消所有作业..."
     scancel -u "$USER"
     echo "已发送取消请求。"
@@ -16,18 +20,26 @@ if [ "$1" = "--cancel-all" ]; then
     exit 0
 fi
 
-if [ -n "$1" ] && [ "$1" != "--cancel-all" ]; then
-    JOB_ID=$1
+if [ -n "${ARGUMENT}" ] && [ "${ARGUMENT}" != "--cancel-all" ]; then
+    JOB_ID="${ARGUMENT}"
     echo ">>> 实时查看作业 ${JOB_ID} 的输出日志..."
     echo "    (按 Ctrl+C 停止)"
     echo ""
 
-    LOG_FILE=$(ls -t logs/*_${JOB_ID}.out 2>/dev/null | head -1)
+    find_log_file() {
+        local candidate
+        for candidate in logs/*_"${JOB_ID}".log logs/*_"${JOB_ID}".out; do
+            [ -f "${candidate}" ] && printf '%s\n' "${candidate}" && return 0
+        done
+        return 1
+    }
+
+    LOG_FILE="$(find_log_file || true)"
     if [ -z "${LOG_FILE}" ]; then
         echo "未找到日志文件, 等待生成..."
         for i in $(seq 1 30); do
             sleep 2
-            LOG_FILE=$(ls -t logs/*_${JOB_ID}.out 2>/dev/null | head -1)
+            LOG_FILE="$(find_log_file || true)"
             [ -n "${LOG_FILE}" ] && break
             echo "  等待中... (${i}/30)"
         done

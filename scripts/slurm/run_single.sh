@@ -18,15 +18,25 @@
 #SBATCH --time=7-00:00:00
 #SBATCH --partition=debug
 
+set -uo pipefail
+
 # ======================== 环境配置 ========================
 
-source /nfs/software/miniconda3/bin/activate
-conda activate drl_mujoco
+CONDA_BASE="${CONDA_BASE:-/nfs/software/miniconda3}"
+[ -f "${CONDA_BASE}/etc/profile.d/conda.sh" ] || { echo "[FATAL] 未找到 Conda: ${CONDA_BASE}"; exit 1; }
+# shellcheck disable=SC1091
+source "${CONDA_BASE}/etc/profile.d/conda.sh"
+conda activate drl_mujoco || exit 1
 
 # ======================== 变量定义 ========================
 
-PROJECT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
-cd "${PROJECT_DIR}"
+if [ -n "${SLURM_SUBMIT_DIR:-}" ]; then
+    PROJECT_DIR="${SLURM_SUBMIT_DIR}"
+else
+    PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+fi
+cd "${PROJECT_DIR}" || exit 1
+[ -f "main.py" ] || { echo "[FATAL] 请在项目根目录提交 sbatch 作业"; exit 1; }
 
 CONFIG_FILE="${1:-config/config_single.yaml}"
 

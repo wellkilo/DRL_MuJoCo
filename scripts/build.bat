@@ -65,7 +65,7 @@ if /i "!build_next!"=="y" (
     ) else (
         echo Building Next.js frontend...
         cd /d "%REPO_ROOT%\web"
-        call npm install
+        call npm ci
         call npm run build
         cd /d "%REPO_ROOT%"
         echo Next.js frontend built successfully!
@@ -101,7 +101,7 @@ echo To run training/UI:
 echo   scripts\start.bat
 echo.
 echo To build Next.js frontend manually:
-echo   cd web ^& npm install ^& npm run build
+echo   cd web ^& npm ci ^& npm run build
 echo.
 echo To build Rust Buffer manually:
 echo   cd rust_buffer ^& pip install maturin ^& maturin develop --release

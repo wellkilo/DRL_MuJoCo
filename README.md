@@ -257,7 +257,7 @@ scripts\start.bat
 | `lr_schedule` | `linear` | 学习率调度策略 |
 | `target_kl` | `0.015` | KL 散度早停阈值 |
 | `num_gpus` | `1` | 🆕 GPU 数量（每个 GPU 运行一个 Learner） |
-| `actors_per_gpu` | `8` | 🆕 每 GPU 分配的 Actor 数量 |
+| `actors_per_gpu` | 自动推导 | 🆕 每 GPU Actor 数；省略时由 `num_actors / num_gpus` 推导，多 GPU 配置建议显式填写 |
 | `param_sync_interval` | `1` | 🆕 多 Learner 参数同步间隔 |
 
 ---
@@ -295,7 +295,7 @@ bash scripts/start.sh  # 选择 6
 ### 生产模式
 
 ```bash
-cd web && npm install && npm run build && cd ..
+cd web && npm ci && npm run build && cd ..
 bash scripts/start.sh  # 选择 5
 # 访问 http://127.0.0.1:8000
 ```
@@ -479,7 +479,9 @@ bash scripts/slurm/setup_env.sh
 > ```bash
 > nvidia-smi  # 查看右上角 CUDA Version
 > ```
-> 如果是 CUDA 12.1，需先编辑 `scripts/slurm/setup_env.sh` 将 `cu118` 改为 `cu121`。
+> 默认安装 CUDA 11.8 版 PyTorch；其他 CUDA 版本通过环境变量覆盖，例如：
+> `PYTORCH_VERSION=<版本> PYTORCH_INDEX_URL=<官方 wheel 源> bash scripts/slurm/setup_env.sh`。
+> 前端依赖使用受版本控制的 `package-lock.json` 和 `npm ci` 可复现安装。
 
 这一步完成后，`drl_mujoco` Conda 环境和 Next.js 前端就构建好了，**以后不需要再运行**。
 
@@ -495,7 +497,7 @@ sbatch scripts/slurm/run_webui.sh
 sbatch --gres=gpu:4 --cpus-per-task=40 --mem=64G scripts/slurm/run_webui.sh
 
 # 查看日志获取连接命令
-cat logs/webui_<JOBID>.out
+cat logs/webui_<JOBID>.log
 ```
 
 日志中会显示 SSH 端口转发命令，在本地终端执行：
@@ -627,7 +629,7 @@ GPU 扩展实验:
   ⑦ python scripts/analyze_scaling.py          ← 🆕 分析 GPU 扩展结果
 ```
 
-> 日志文件自动写入 `logs/` 目录，格式为 `single_<JOBID>.out`、`dist_<JOBID>.out`、`webui_<JOBID>.out`、`scale_<JOBID>.out`。
+> 日志文件自动写入 `logs/` 目录；Web UI 使用合并日志 `webui_<JOBID>.log`，其他作业继续使用 `.out/.err`。可统一执行 `bash scripts/slurm/monitor.sh <JOBID>` 查看。
 
 ### 🆕 Web UI 新增 API
 
