@@ -25,6 +25,7 @@ import torch
 from drl.config_loader import load_config
 from drl.logging_utils import log_event
 from drl.ray_components import Learner, MuJoCoActor, ParameterServer, ReplayBuffer, _merge_obs_rms_states
+from drl.training_utils import average_metrics, resolve_training_topology
 
 # 全局变量用于信号处理
 global_state: dict[str, Any] = {}
@@ -156,21 +157,32 @@ def main() -> None:
     print(f"[Main] Ray cluster resources: {ray.cluster_resources()}", flush=True)
 
     # ---- 根据 num_gpus 创建多个 Learner ----
-    num_gpus = getattr(cfg, 'num_gpus', 1)
-    actors_per_gpu = getattr(cfg, 'actors_per_gpu', 8)
+    requested_num_gpus = cfg.num_gpus
     param_sync_interval = getattr(cfg, 'param_sync_interval', 1)
+    if param_sync_interval <= 0:
+        raise ValueError("param_sync_interval must be positive")
 
-    # 检测 Ray 集群中可用的 GPU 数量, 自动调整 num_gpus
+    # 检测 Ray 集群中可用的 GPU 数量，并在保留 num_actors 契约的前提下
+    # 解析有效拓扑。单机配置 num_actors=1 必须真实启动一个 Actor。
     ray_gpu_count = int(ray.cluster_resources().get("GPU", 0))
-    if ray_gpu_count > 0 and num_gpus > ray_gpu_count:
-        print(f"[Main] WARNING: Requested {num_gpus} GPUs but only {ray_gpu_count} available. "
-              f"Adjusting num_gpus={ray_gpu_count}", flush=True)
-        num_gpus = ray_gpu_count
-    elif ray_gpu_count == 0 and num_gpus > 1:
+    topology = resolve_training_topology(
+        num_actors=cfg.num_actors,
+        num_gpus=requested_num_gpus,
+        actors_per_gpu=cfg.actors_per_gpu,
+        available_gpus=ray_gpu_count,
+    )
+    num_gpus = topology.active_gpus
+    actors_per_gpu = topology.actors_per_gpu
+    if ray_gpu_count > 0 and requested_num_gpus > ray_gpu_count:
+        print(
+            f"[Main] WARNING: Requested {requested_num_gpus} GPUs but only "
+            f"{ray_gpu_count} available. Adjusting num_gpus={num_gpus}",
+            flush=True,
+        )
+    elif ray_gpu_count == 0 and requested_num_gpus > 1:
         print(f"[Main] WARNING: No GPUs in Ray cluster, falling back to single Learner (CPU/MPS)", flush=True)
-        num_gpus = 1
 
-    num_actors_total = num_gpus * actors_per_gpu
+    num_actors_total = topology.total_actors
 
     print(f"[Main] Configuration: {num_gpus} GPUs × {actors_per_gpu} Actors/GPU = "
           f"{num_actors_total} total Actors", flush=True)
@@ -288,7 +300,7 @@ def main() -> None:
         results = ray.get(done_ids)
         
         # 收集所有 Actor 的 obs_rms 统计量
-        all_obs_rms_states: list[dict] = []
+        all_obs_rms_moments: list[dict] = []
 
         # 处理所有已完成的采样任务
         for done_id, (traj, stats) in zip(done_ids, results):
@@ -300,8 +312,8 @@ def main() -> None:
                 ray.get(buf.add.remote(traj))
 
             # 收集 Actor 的观测归一化统计量
-            if "obs_rms_state" in stats:
-                all_obs_rms_states.append(stats["obs_rms_state"])
+            if stats.get("obs_rms_moments") is not None:
+                all_obs_rms_moments.append(stats["obs_rms_moments"])
 
             # 累计统计信息
             traj_len = len(traj)
@@ -311,19 +323,24 @@ def main() -> None:
             total_episodes += ep_count
             total_return_sum += ep_return_sum
             
-            # 将本轮 episode 的平均回报加入滑动窗口
-            if ep_count > 0:
-                recent_returns.append(ep_return_sum / ep_count)
+            # 按 episode 更新滑动窗口，避免不同 Actor 的 episode 数造成加权偏差。
+            recent_returns.extend(float(value) for value in stats.get("episode_returns", []))
                 
-            # 排除 obs_rms_state（包含 numpy 数组，不可 JSON 序列化）
-            log_stats = {k: v for k, v in stats.items() if k != "obs_rms_state"}
+            # 排除包含 numpy 数组的 moments，避免 JSON 序列化失败。
+            log_stats = {
+                k: v for k, v in stats.items()
+                if k not in {"obs_rms_moments", "episode_returns"}
+            }
             log_event("actor_sample", {"step": train_step, **log_stats, "traj_len": traj_len})
 
-        # 合并所有 Actor 的 obs_rms 统计量并同步到 ParameterServer
-        if all_obs_rms_states:
-            merged_obs_rms = _merge_obs_rms_states(all_obs_rms_states)
+        # 合并本轮新增 moments，再由 ParameterServer 与全局历史合并一次。
+        if all_obs_rms_moments:
+            merged_obs_rms = _merge_obs_rms_states(all_obs_rms_moments)
             if merged_obs_rms is not None:
                 ray.get(param_server.update_obs_rms.remote(merged_obs_rms))
+
+        # Learner 会在 train_step 末尾清空 Buffer，因此必须在训练前记录。
+        total_buffer_size = sum(ray.get([buf.size.remote() for buf in buffers]))
 
         # 阶段2：所有 Learner 并行训练
         train_futures = [
@@ -345,30 +362,33 @@ def main() -> None:
                 learner.set_state.remote(avg_params) for learner in learners
             ]
             ray.get(sync_futures)
+            sampling_params = [avg_params] * num_gpus
         else:
-            # 单 Learner 或非同步轮: 直接设置
+            # 非同步轮保留每个 Learner 的本地参数，其所属 Actor 必须用同一策略采样。
             avg_params = all_state_dicts[0]
             ray.get(param_server.set.remote(avg_params))
+            sampling_params = all_state_dicts
 
         # ===== 关键优化：先发起 Actor 采样，再做保存等操作 =====
         current_obs_rms = ray.get(param_server.get_obs_rms.remote())
         actor_tasks = {}
         for actor in all_actors:
-            task = actor.sample.remote(avg_params, cfg.rollout_length, cfg.gamma, cfg.gae_lambda, current_obs_rms)
+            learner_index = actor_to_learner[id(actor)]
+            task = actor.sample.remote(
+                sampling_params[learner_index],
+                cfg.rollout_length,
+                cfg.gamma,
+                cfg.gae_lambda,
+                current_obs_rms,
+            )
             actor_tasks[task] = actor
 
         # ===== 阶段4：日志和模型保存（此时 Actor 已经在并行采样） =====
-        # 使用第一个 Learner 的 metrics 作为代表
-        metrics_0 = train_results[0]["metrics"]
+        metrics_all = average_metrics([result["metrics"] for result in train_results])
         elapsed = time.time() - start_time
         sps = total_steps / elapsed if elapsed > 0 else 0.0
         avg_return = sum(recent_returns) / len(recent_returns) if recent_returns else math.nan
         
-        # 获取总 buffer 大小
-        total_buffer_size = 0
-        for buf in buffers:
-            total_buffer_size += ray.get(buf.size.remote())
-
         log_event(
             "learner_update",
             {
@@ -379,7 +399,7 @@ def main() -> None:
                 "sps": sps,
                 "episodes": total_episodes,
                 "avg_return": avg_return,
-                **metrics_0,
+                **metrics_all,
             },
         )
         metrics_writer.writerow(
@@ -391,16 +411,16 @@ def main() -> None:
                 "episodes": total_episodes,
                 "avg_return": avg_return,
                 "buffer_size": total_buffer_size,
-                "loss": metrics_0.get("loss", math.nan),
-                "policy_loss": metrics_0.get("policy_loss", math.nan),
-                "value_loss": metrics_0.get("value_loss", math.nan),
-                "entropy": metrics_0.get("entropy", math.nan),
-                "ratio": metrics_0.get("ratio", math.nan),
-                "approx_kl": metrics_0.get("approx_kl", math.nan),
-                "clip_fraction": metrics_0.get("clip_fraction", math.nan),
-                "explained_var": metrics_0.get("explained_var", math.nan),
-                "grad_norm": metrics_0.get("grad_norm", math.nan),
-                "lr": metrics_0.get("lr", math.nan),
+                "loss": metrics_all.get("loss", math.nan),
+                "policy_loss": metrics_all.get("policy_loss", math.nan),
+                "value_loss": metrics_all.get("value_loss", math.nan),
+                "entropy": metrics_all.get("entropy", math.nan),
+                "ratio": metrics_all.get("ratio", math.nan),
+                "approx_kl": metrics_all.get("approx_kl", math.nan),
+                "clip_fraction": metrics_all.get("clip_fraction", math.nan),
+                "explained_var": metrics_all.get("explained_var", math.nan),
+                "grad_norm": metrics_all.get("grad_norm", math.nan),
+                "lr": metrics_all.get("lr", math.nan),
                 "num_gpus": num_gpus,
             }
         )

@@ -1,66 +1,57 @@
 #!/bin/bash
 #===============================================================================
-# setup_env.sh — 在 Slurm 集群上创建项目 Conda 环境
-#
-# 用法 (在管理节点上直接运行, 不需要 sbatch):
-#   bash scripts/slurm/setup_env.sh
-#
-# 或者通过 Slurm 交互式节点运行:
-#   srun --partition=debug --cpus-per-task=4 --mem=8G --pty bash -i
-#   bash scripts/slurm/setup_env.sh
+# setup_env.sh — 在 Slurm 集群上创建 Conda 环境 + 前端依赖
 #===============================================================================
+set -euo pipefail
 
-set -e
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+echo "PROJECT_DIR = ${PROJECT_DIR}"
 
-ENV_NAME="drl_mujoco"
-PYTHON_VERSION="3.9"
+ENV_NAME="${ENV_NAME:-drl_mujoco}"
+PYTHON_VERSION="${PYTHON_VERSION:-3.9}"
+NODE_VERSION="${NODE_VERSION:-20}"
+PYTORCH_VERSION="${PYTORCH_VERSION:-2.7.1}"
+PYTORCH_INDEX_URL="${PYTORCH_INDEX_URL:-https://download.pytorch.org/whl/cu118}"
 
-echo "=============================================="
-echo "  创建 Conda 环境: ${ENV_NAME}"
-echo "=============================================="
+# ---------- 加载 conda 初始化脚本 ----------
+CONDA_BASE="${CONDA_BASE:-/nfs/software/miniconda3}"
+if [ ! -f "${CONDA_BASE}/etc/profile.d/conda.sh" ]; then
+    echo "错误: 未找到 ${CONDA_BASE}/etc/profile.d/conda.sh"
+    exit 1
+fi
+# shellcheck disable=SC1091
+source "${CONDA_BASE}/etc/profile.d/conda.sh"
+echo "conda version: $(conda --version)"
 
-# 加载 Conda
-source /nfs/software/miniconda3/bin/activate
-
-# 检查环境是否已存在
-if conda info --envs | grep -q "${ENV_NAME}"; then
+# ---------- 创建 / 复用环境 ----------
+if conda info --envs | awk '{print $1}' | grep -qx "${ENV_NAME}"; then
     echo "环境 ${ENV_NAME} 已存在。"
-    read -p "是否重新创建？(y/N): " REPLY
-    if [[ "$REPLY" =~ ^[Yy]$ ]]; then
-        echo "删除旧环境..."
-        conda env remove -n ${ENV_NAME} -y
-    else
-        echo "跳过创建, 仅更新依赖..."
-        conda activate ${ENV_NAME}
-        pip install -r requirements.txt
-        echo "依赖更新完成！"
-        exit 0
+    read -r -p "是否重新创建？(y/N): " REPLY
+    if [[ "${REPLY}" =~ ^[Yy]$ ]]; then
+        conda env remove -n "${ENV_NAME}" -y
     fi
 fi
 
-# 创建新环境
-echo ""
-echo ">>> 创建 Conda 环境 (Python ${PYTHON_VERSION})..."
-conda create -n ${ENV_NAME} python=${PYTHON_VERSION} -y
+if ! conda info --envs | awk '{print $1}' | grep -qx "${ENV_NAME}"; then
+    echo ">>> 创建 Conda 环境 (Python ${PYTHON_VERSION})..."
+    conda create -n "${ENV_NAME}" "python=${PYTHON_VERSION}" -y
+fi
 
-# 激活环境
-conda activate ${ENV_NAME}
+conda activate "${ENV_NAME}"
 
-# 安装 PyTorch (根据集群 CUDA 版本选择)
-echo ""
-echo ">>> 安装 PyTorch (CUDA)..."
-# 如果集群是 CUDA 11.8:
-pip install torch --index-url https://download.pytorch.org/whl/cu118
+# ---------- Python 依赖 ----------
+echo ">>> 安装 PyTorch ${PYTORCH_VERSION}: ${PYTORCH_INDEX_URL}"
+python -m pip install "torch==${PYTORCH_VERSION}" --index-url "${PYTORCH_INDEX_URL}"
 
-# 如果集群是 CUDA 12.1, 改用:
-# pip install torch --index-url https://download.pytorch.org/whl/cu121
+echo ">>> 安装 Python 项目依赖..."
+python -m pip install -r "${PROJECT_DIR}/requirements.txt"
 
-# 安装项目依赖
-echo ""
-echo ">>> 安装项目依赖..."
-pip install -r requirements.txt
+# ---------- Node.js ----------
+echo ">>> 安装 Node.js ${NODE_VERSION} ..."
+conda install -c conda-forge "nodejs=${NODE_VERSION}" -y
 
-# 验证安装
+# ---------- 验证 ----------
 echo ""
 echo "=============================================="
 echo "  环境验证"
@@ -71,38 +62,43 @@ echo "CUDA可用:   $(python -c 'import torch; print(torch.cuda.is_available())'
 echo "Ray:        $(python -c 'import ray; print(ray.__version__)')"
 echo "Gymnasium:  $(python -c 'import gymnasium; print(gymnasium.__version__)')"
 echo "MuJoCo:     $(python -c 'import mujoco; print(mujoco.__version__)')"
+echo "Node:       $(node --version)"
+echo "npm:        $(npm --version)"
 
-# MuJoCo 渲染测试 (headless)
 echo ""
-echo ">>> 测试 MuJoCo 环境创建..."
-python -c "
+echo ">>> 测试 MuJoCo 环境..."
+python - <<'PYEOF'
 import gymnasium as gym
 env = gym.make('Hopper-v5')
 obs, info = env.reset()
-print(f'Hopper-v5 obs shape: {obs.shape}, action space: {env.action_space}')
+print(f"Hopper-v5 obs shape: {obs.shape}, action space: {env.action_space}")
 env.close()
-print('MuJoCo 环境测试通过!')
-"
+print("MuJoCo 环境测试通过!")
+PYEOF
 
-# ======================== 构建 Next.js 前端 ========================
-
+# ---------- 前端 ----------
 echo ""
 echo ">>> 构建 Next.js 前端..."
-if command -v npm &> /dev/null; then
-    cd "${PROJECT_DIR}/web"
-    [ ! -d "node_modules" ] && npm install
-    npm run build
-    cd "${PROJECT_DIR}"
-    echo "前端构建完成 (web/out/)"
+WEB_DIR="${PROJECT_DIR}/web"
+if [ ! -d "${WEB_DIR}" ]; then
+    echo "警告: 未找到 ${WEB_DIR}, 跳过前端构建。"
 else
-    echo "npm 不可用, 请在本地执行以下命令后上传:"
-    echo "  cd web && npm install && npm run build"
-    echo "然后将 web/out/ 目录上传到集群"
+    pushd "${WEB_DIR}" > /dev/null
+    if [ ! -f "package-lock.json" ]; then
+        echo "错误: 未找到 ${WEB_DIR}/package-lock.json，无法进行可复现安装。"
+        exit 1
+    fi
+    # 保留 lockfile 和平台可选依赖（Next.js SWC 等），确保集群重建结果一致。
+    npm ci
+    npm run build
+    popd > /dev/null
+    echo "前端构建完成 (web/out/)"
 fi
 
 echo ""
 echo "=============================================="
 echo "  环境 ${ENV_NAME} 创建完成!"
-echo "  使用方式: conda activate ${ENV_NAME}"
+echo "  以后开新终端使用方式:"
+echo "    conda activate ${ENV_NAME}"
 echo "  启动 Web UI: sbatch scripts/slurm/run_webui.sh"
 echo "=============================================="

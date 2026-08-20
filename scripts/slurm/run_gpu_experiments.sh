@@ -9,7 +9,7 @@
 #   bash scripts/slurm/run_gpu_experiments.sh --gpus 4 8     # 仅 4 和 8 GPU
 #===============================================================================
 
-set -e
+set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
@@ -39,7 +39,7 @@ echo "=============================================="
 
 # 确保配置已生成
 [ ! -d "${PROJECT_DIR}/config/scaling" ] && \
-    (cd "${PROJECT_DIR}" && python scripts/gen_scaling_configs.py --gpu_counts ${GPU_COUNTS[@]})
+    (cd "${PROJECT_DIR}" && python scripts/gen_scaling_configs.py --gpu_counts "${GPU_COUNTS[@]}")
 
 mkdir -p "${PROJECT_DIR}/logs"
 SUBMITTED=0
@@ -55,14 +55,13 @@ for env in "${ENVS[@]}"; do
         CPUS=$(( GPUS_NODE * CPUS_PER_GPU ))
         MEM=$(( GPUS_NODE * MEM_PER_GPU ))
 
-        CMD="sbatch --job-name=drl_${env}_g${num_gpus} \
-            --nodes=${NODES} --gres=gpu:${GPUS_NODE} \
-            --cpus-per-task=${CPUS} --mem=${MEM}G \
-            ${SCRIPT_DIR}/run_scaling.sh ${CFG} ${num_gpus}"
-
         echo "  [GPU=${num_gpus}] nodes=${NODES} gpus/node=${GPUS_NODE} cpus=${CPUS} mem=${MEM}G"
         if [ "$DRY_RUN" = false ]; then
-            OUTPUT=$(cd "${PROJECT_DIR}" && eval ${CMD})
+            OUTPUT=$(cd "${PROJECT_DIR}" && sbatch \
+                --job-name="drl_${env}_g${num_gpus}" \
+                --nodes="${NODES}" --ntasks-per-node=1 --gres="gpu:${GPUS_NODE}" \
+                --cpus-per-task="${CPUS}" --mem="${MEM}G" \
+                "${SCRIPT_DIR}/run_scaling.sh" "${CFG}" "${num_gpus}")
             echo "    → ${OUTPUT}"
             SUBMITTED=$((SUBMITTED + 1))
         fi

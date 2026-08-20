@@ -14,20 +14,30 @@
 #SBATCH --partition=debug
 #SBATCH --time=7-00:00:00
 #SBATCH --nodes=1
-#SBATCH --ntasks=1
+#SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=32G
 #SBATCH --gres=gpu:1
 
+set -uo pipefail
+
 # ======================== 环境配置 ========================
 
-source /nfs/software/miniconda3/bin/activate
-conda activate drl_mujoco
+CONDA_BASE="${CONDA_BASE:-/nfs/software/miniconda3}"
+[ -f "${CONDA_BASE}/etc/profile.d/conda.sh" ] || { echo "[FATAL] 未找到 Conda: ${CONDA_BASE}"; exit 1; }
+# shellcheck disable=SC1091
+source "${CONDA_BASE}/etc/profile.d/conda.sh"
+conda activate drl_mujoco || exit 1
 
 # ======================== 参数解析 ========================
 
-PROJECT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
-cd "${PROJECT_DIR}"
+if [ -n "${SLURM_SUBMIT_DIR:-}" ]; then
+    PROJECT_DIR="${SLURM_SUBMIT_DIR}"
+else
+    PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+fi
+cd "${PROJECT_DIR}" || exit 1
+[ -f "main.py" ] || { echo "[FATAL] 请在项目根目录提交 sbatch 作业"; exit 1; }
 
 CONFIG_FILE="${1:-config/config.yaml}"
 NUM_GPUS="${2:-1}"
@@ -37,13 +47,25 @@ mkdir -p output/scaling
 
 # ======================== Ray 集群配置 ========================
 
-export RAY_TMPDIR="${PROJECT_DIR}/.ray_tmp_${SLURM_JOB_ID}"
+RAY_TMP_ROOT="${PROJECT_DIR}/.ray_tmp_${SLURM_JOB_ID}"
+export RAY_TMPDIR="${RAY_TMP_ROOT}/$(hostname -s)"
 mkdir -p "${RAY_TMPDIR}"
 export RAY_DISABLE_DASHBOARD=1
+USE_RAY_CLUSTER=false
+cleanup() {
+    if [ "${USE_RAY_CLUSTER:-false}" = true ]; then
+        ray stop --force >/dev/null 2>&1 || true
+    fi
+    if [[ -n "${RAY_TMP_ROOT:-}" && "${RAY_TMP_ROOT}" == "${PROJECT_DIR}/.ray_tmp_"* ]]; then
+        rm -rf -- "${RAY_TMP_ROOT}"
+    fi
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 # 检测节点数
-NUM_NODES=$(scontrol show job ${SLURM_JOB_ID} 2>/dev/null | grep -oP 'NumNodes=\K\d+')
-NUM_NODES=${NUM_NODES:-1}
+NUM_NODES="${SLURM_JOB_NUM_NODES:-1}"
 
 if [ "${NUM_NODES}" -gt 1 ]; then
     echo ">>> 多节点模式: ${NUM_NODES} 节点"
@@ -59,11 +81,13 @@ if [ "${NUM_NODES}" -gt 1 ]; then
         sleep 10
 
         for worker in $(scontrol show hostnames ${SLURM_JOB_NODELIST} | tail -n +2); do
+            WORKER_TMPDIR="${RAY_TMP_ROOT}/${worker}"
+            mkdir -p "${WORKER_TMPDIR}"
             srun --nodes=1 --ntasks=1 -w ${worker} \
                 ray start --address="${HEAD_NODE}:${RAY_PORT}" \
                 --num-cpus=${SLURM_CPUS_PER_TASK} \
                 --num-gpus=${GPUS_PER_NODE} \
-                --temp-dir="${RAY_TMPDIR}" --block &
+                --temp-dir="${WORKER_TMPDIR}" --block &
             sleep 5
         done
         sleep 10
@@ -71,8 +95,6 @@ if [ "${NUM_NODES}" -gt 1 ]; then
         export RAY_ADDRESS="${HEAD_NODE}:${RAY_PORT}"
     fi
     USE_RAY_CLUSTER=true
-else
-    USE_RAY_CLUSTER=false
 fi
 
 # ======================== 作业信息 ========================
@@ -103,9 +125,6 @@ fi
 EXIT_CODE=$?
 
 # ======================== 清理 ========================
-
-[ "${USE_RAY_CLUSTER}" = true ] && ray stop --force 2>/dev/null
-rm -rf "${RAY_TMPDIR}" 2>/dev/null
 
 echo "退出码: ${EXIT_CODE}, 结束时间: $(date '+%Y-%m-%d %H:%M:%S')"
 exit ${EXIT_CODE}

@@ -64,7 +64,7 @@ if [[ "$build_next" =~ ^[Yy]$ ]]; then
     if command -v npm &> /dev/null; then
         echo "Building Next.js frontend..."
         cd "$REPO_ROOT/web"
-        npm install
+        npm ci
         npm run build
         cd "$REPO_ROOT"
         echo "Next.js frontend built successfully!"
@@ -102,7 +102,7 @@ echo "To run training/UI:"
 echo "  bash scripts/start.sh"
 echo ""
 echo "To build Next.js frontend manually:"
-echo "  cd web && npm install && npm run build"
+echo "  cd web && npm ci && npm run build"
 echo ""
 echo "To build Rust Buffer manually:"
 echo "  cd rust_buffer && pip install maturin && maturin develop --release"

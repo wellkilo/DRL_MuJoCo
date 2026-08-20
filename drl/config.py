@@ -57,5 +57,7 @@ class Config:
 
     # ==================== GPU 扩展配置 ====================
     num_gpus: int = 1                # GPU 数量 (每个 GPU 运行一个 Learner)
-    actors_per_gpu: int = 8          # 每 GPU 分配的 Actor 数量
+    # None 表示根据 num_actors / num_gpus 推导，兼容原有单机配置。
+    # 多 GPU 扩展配置应显式填写该字段。
+    actors_per_gpu: int | None = None
     param_sync_interval: int = 1     # 多 Learner 参数平均间隔 (每 N 轮同步一次)
